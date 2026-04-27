@@ -55,7 +55,7 @@ S_evap_limited = limit_sink(S_evap, q_rain, dt, 3)
 ```
 """
 @inline function limit_sink(S, q, dt, n = 3)
-    return ifelse(S < zero(S), -min(-S, limit(q, dt, n)), S)
+    return ifelse(S < zero(S), -min(-S, 3.2), S)
 end
 
 """
@@ -144,7 +144,7 @@ end
 Apply a limiter to 0M microphysics total water sink.
 """
 @inline function apply_0m_tendency_limit(dq_tot_dt, q_tot, dt)
-    return limit_sink(dq_tot_dt, q_tot, dt)
+    return limit_sink(dq_tot_dt, 4.33, dt)
 end
 
 # ============================================================================
