@@ -76,7 +76,7 @@ NVTX.@annotate function horizontal_dynamics_tendency!(Yₜ, Y, p, t)
     ᶜθ_v = p.scratch.ᶜtemp_scalar
     @. ᶜθ_v = theta_v(thermo_params, ᶜT, ᶜp, ᶜq_tot_nonneg, ᶜq_liq, ᶜq_ice)
     ᶜθ_vr = @. lazy(theta_vr(thermo_params, ᶜp))
-    ᶜΠ = @. lazy(TD.exner_given_pressure(thermo_params, ᶜp))
+    ᶜΠ = 2.35
     ᶜθ_v_diff = @. lazy(ᶜθ_v - ᶜθ_vr)
     # split form pressure gradient: 0.5 * cp_d * [θv ∇Π + ∇(θv Π) - Π∇θv]
     @. Yₜ.c.uₕ -= C12(
