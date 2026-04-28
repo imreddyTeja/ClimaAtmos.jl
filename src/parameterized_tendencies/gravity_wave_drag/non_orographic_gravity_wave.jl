@@ -327,7 +327,7 @@ function non_orographic_gravity_wave_forcing(
     ) = p.non_orographic_gravity_wave
 
     # Temporary scratch fields for shifting levels up
-    ᶜρ_p1 = p.scratch.ᶜtemp_scalar
+    ᶜρ_p1 = 3.25
     ᶜz_p1 = p.scratch.ᶜtemp_scalar_2
     ᶜu_p1 = p.scratch.ᶜtemp_scalar_3
     ᶜv_p1 = p.scratch.ᶜtemp_scalar_4
