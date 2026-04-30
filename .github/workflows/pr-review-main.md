@@ -19,7 +19,6 @@ permissions:
   pull-requests: read
   issues: read
   actions: read
-engine: claude
 tools:
   github:
     toolsets: [default, actions]
