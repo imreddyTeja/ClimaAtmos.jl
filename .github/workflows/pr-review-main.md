@@ -1,6 +1,7 @@
 ---
 description: Review pull requests targeting main using the ClimaAtmos PR review rubric.
 on:
+  bots: ["dependabot[bot]", "renovate[bot]", "github-actions[bot]"]
   roles: all
   pull_request:
     branches: [main]
@@ -13,7 +14,6 @@ on:
         required: false
         default: "3"
         type: string
-bots: ["dependabot[bot]", "renovate[bot]", "github-actions[bot]"]
 permissions:
   contents: read
   pull-requests: read
