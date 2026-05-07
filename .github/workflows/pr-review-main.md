@@ -19,6 +19,7 @@ permissions:
   pull-requests: read
   issues: read
   actions: read
+engine: gemini
 tools:
   github:
     toolsets: [default, actions]
