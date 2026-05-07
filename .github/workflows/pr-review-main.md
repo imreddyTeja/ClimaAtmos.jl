@@ -37,7 +37,15 @@ tools:
     - wc
     - git
     - julia
-network: {}
+network:
+  allowed:
+    - defaults
+    - chrome
+    - github
+    - node
+    - local
+    - threat-detection
+    - 172.30.0.30
 safe-outputs:
   create-pull-request-review-comment:
     max: 10
