@@ -19,6 +19,7 @@ permissions:
   pull-requests: read
   issues: read
   actions: read
+strict: false
 engine: gemini
 tools:
   github:
@@ -44,9 +45,11 @@ network:
     - github
     - node
     - local
-    - threat-detection
     - 172.30.0.30
+sandbox:
+  agent: false
 safe-outputs:
+  threat-detection: false
   create-pull-request-review-comment:
     max: 10
     target: "*"
