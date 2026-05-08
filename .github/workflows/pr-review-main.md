@@ -12,7 +12,7 @@ on:
       pr_number:
         description: Pull request number to review when running manually.
         required: false
-        default: "3"
+        default: "4440"
         type: string
 permissions:
   contents: read
@@ -27,6 +27,8 @@ tools:
     allowed-repos: "all"
     min-integrity: unapproved
   bash:
+    - safeoutputs
+    - mcpscripts
     - find
     - cat
     - grep
@@ -74,10 +76,12 @@ Review the target pull request against the ClimaAtmos review rubric.
 
 Resolve the target pull request number before reviewing:
 
-- On `pull_request` runs, use the triggering pull request number.
-- On `workflow_dispatch` runs, use `${{ github.event.inputs.pr_number }}`. The default manual test target is PR #4440.
+- On `pull_request` runs, use the triggering pull request number `${{ github.event.pull_request.number }}`.
+- On `workflow_dispatch` runs, use `${{ github.event.inputs.pr_number }}`.
 
 Review only that resolved pull request.
+
+On `pull_request` runs, the checked-out workspace already corresponds to the target PR merge ref. Start from that local checkout and its diff instead of fetching an example PR number.
 
 Start with the changed files, then step only to the nearest controlling code paths needed to confirm behavior or risk.
 
@@ -100,6 +104,8 @@ That `submit_pull_request_review` call must include `pull_request_number` set to
 If you found no concrete bugs, the review body must contain the exact sentence `No concrete bugs found.` and then briefly list residual risks or testing gaps.
 
 If no GitHub review action is needed, call `noop` with a short explanation. Do not call `noop` if you already submitted a review or review comments.
+
+If the review is blocked because the diff, PR metadata, or repository context cannot be retrieved from the checked-out workspace or read-only GitHub tools, do not ask the user for more input. Call `noop` with the blocker and what you were able to verify.
 
 ## Validation Guidance
 
