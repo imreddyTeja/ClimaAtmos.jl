@@ -318,14 +318,32 @@ using ClimaAtmos
                 tps = TD.Parameters.ThermodynamicsParameters(toml_dict)
                 mp = CMP.Microphysics1MParams(toml_dict)
 
-                # Grid-mean state
+                # Grid-mean state at saturation equilibrium. With Stage C the
+                # shape-function partition recovers the grid-mean state exactly
+                # at a single quadrature point provided the cached moments
+                # `(M_l, M_i)` equal the local equilibrium condensate at the
+                # mean — which we compute below to keep the tests self-contained.
                 ρ = FT(1.2)
                 T_mean = FT(280.0)
-                q_tot_mean = FT(0.01)
                 q_lcl_mean = FT(0.0001)
                 q_icl_mean = FT(0.00005)
                 q_rai = FT(0.0001)
                 q_sno = FT(0.00001)
+                q_sat_mean = TD.q_vap_saturation(tps, T_mean, ρ)
+                q_tot_mean = q_sat_mean + q_lcl_mean + q_icl_mean + q_rai + q_sno
+
+                # Cached SGS moments consistent with a 1-point quadrature: at
+                # the grid mean `(T_mean, q_tot_mean)`, the equilibrium
+                # partition matches the prognostic condensate exactly, so
+                # M_l = q_lcl_mean, M_i = q_icl_mean.
+                λ = TD.liquid_fraction(tps, T_mean, q_lcl_mean, q_icl_mean)
+                excess_mean = q_tot_mean - q_sat_mean
+                M_l_eq = max(FT(0), λ * excess_mean - q_rai)
+                M_i_eq = max(FT(0), (FT(1) - λ) * excess_mean - q_sno)
+                moments_eq = (
+                    mu_S = excess_mean, sigma_S_sq = FT(0),
+                    M_l = M_l_eq, M_i = M_i_eq,
+                )
 
                 # Variances and correlation
                 T′T′ = FT(1.0)
@@ -339,29 +357,25 @@ using ClimaAtmos
 
                 # Test 1: Single quadrature point should match grid-mean evaluation
                 @testset "Single Point = Grid Mean" begin
-                    # Use GaussianSGS: only Gaussian has χ=0 → (μ_T, μ_q)
                     quad_1pt = ClimaAtmos.SGSQuadrature(
                         FT;
                         quadrature_order = 1,
                         distribution = ClimaAtmos.GaussianSGS(),
                     )
 
-                    # Quadrature result (no limiting)
                     result_quad = microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(),
                         quad_1pt, mp, tps, ρ,
                         T_mean, q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                        T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                        T′T′, q′q′, corr_Tq, moments_eq, dt, nsubs_quad,
                     )
 
-                    # Direct evaluation at grid mean
                     result_direct = BMT.average_bulk_microphysics_tendencies(
                         BMT.Microphysics1Moment(),
                         mp, tps, ρ, T_mean,
                         q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno, dt, nsubs_quad,
                     )
 
-                    # Compare all fields
                     @test result_quad.dq_lcl_dt ≈ result_direct.dq_lcl_dt rtol = FT(1e-5)
                     @test result_quad.dq_icl_dt ≈ result_direct.dq_icl_dt rtol = FT(1e-5)
                     @test result_quad.dq_rai_dt ≈ result_direct.dq_rai_dt rtol = FT(1e-5)
@@ -372,15 +386,13 @@ using ClimaAtmos
                 @testset "Zero Variance = Grid Mean" begin
                     quad = ClimaAtmos.SGSQuadrature(FT; quadrature_order = 3)
 
-                    # Zero variances
                     result_quad = microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(),
                         quad, mp, tps, ρ,
                         T_mean, q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                        FT(0), FT(0), FT(0), dt, nsubs_quad,
+                        FT(0), FT(0), FT(0), moments_eq, dt, nsubs_quad,
                     )
 
-                    # Direct evaluation
                     result_direct = BMT.average_bulk_microphysics_tendencies(
                         BMT.Microphysics1Moment(),
                         mp, tps, ρ, T_mean,
@@ -399,7 +411,7 @@ using ClimaAtmos
                         BMT.Microphysics1Moment(),
                         quad, mp, tps, ρ,
                         T_mean, q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                        T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                        T′T′, q′q′, corr_Tq, moments_eq, dt, nsubs_quad,
                     )
 
                     @test haskey(result, :dq_lcl_dt)
@@ -409,28 +421,24 @@ using ClimaAtmos
                     @test result.dq_lcl_dt isa FT
                 end
 
-                # Test 4: Non-zero variance produces different result
+                # Test 4: Non-zero variance produces a finite result
                 @testset "Variance Effect" begin
                     quad = ClimaAtmos.SGSQuadrature(FT; quadrature_order = 3)
 
-                    # With variance
                     result_var = microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(),
                         quad, mp, tps, ρ,
                         T_mean, q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                        FT(4.0), FT(1e-5), FT(0.8), dt, nsubs_quad,
+                        FT(4.0), FT(1e-5), FT(0.8), moments_eq, dt, nsubs_quad,
                     )
 
-                    # Without variance
                     result_no_var = microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(),
                         quad, mp, tps, ρ,
                         T_mean, q_tot_mean, q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                        FT(0), FT(0), FT(0), dt, nsubs_quad,
+                        FT(0), FT(0), FT(0), moments_eq, dt, nsubs_quad,
                     )
 
-                    # Results should differ (unless microphysics is perfectly linear)
-                    # At minimum, they should both be finite
                     @test isfinite(result_var.dq_lcl_dt)
                     @test isfinite(result_no_var.dq_lcl_dt)
                 end
@@ -493,10 +501,20 @@ using ClimaAtmos
                 dt = FT(1.0)
                 nsubs_quad = 1
 
+                # Cached SGS moments consistent with the grid-mean equilibrium.
+                q_sat = TD.q_vap_saturation(thp, T, ρ)
+                λ = TD.liquid_fraction(thp, T, q_liq, q_ice)
+                excess = max(FT(0), q_tot - q_sat)
+                M_l = max(FT(0), λ * excess - q_rai)
+                M_i = max(FT(0), (FT(1) - λ) * excess - q_sno)
+                moments = (
+                    mu_S = excess, sigma_S_sq = FT(0), M_l = M_l, M_i = M_i,
+                )
+
                 result = microphysics_tendencies_1m(
                     BMT.Microphysics1Moment(),
                     quad, mp, thp, ρ, T, q_tot, q_liq, q_ice, q_rai, q_sno,
-                    T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                    T′T′, q′q′, corr_Tq, moments, dt, nsubs_quad,
                 )
 
                 # Total condensed water tendency
@@ -555,11 +573,21 @@ using ClimaAtmos
                 dt = FT(1.0)
                 nsubs_quad = 1
 
+                # Cached SGS moments (any consistent value works for type test).
+                q_sat = TD.q_vap_saturation(thp, T, ρ)
+                λ = TD.liquid_fraction(thp, T, q_liq, q_ice)
+                excess = max(FT(0), q_tot - q_sat)
+                moments = (
+                    mu_S = excess, sigma_S_sq = FT(0),
+                    M_l = max(FT(0), λ * excess - q_rai),
+                    M_i = max(FT(0), (FT(1) - λ) * excess - q_sno),
+                )
+
                 # Test type stability
                 result = @inferred microphysics_tendencies_1m(
                     BMT.Microphysics1Moment(),
                     quad, mp, thp, ρ, T, q_tot, q_liq, q_ice, q_rai, q_sno,
-                    T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                    T′T′, q′q′, corr_Tq, moments, dt, nsubs_quad,
                 )
 
                 # Verify return type
@@ -596,13 +624,23 @@ using ClimaAtmos
                 dt = FT(60)
                 nsubs_quad = 1
 
-                # Create evaluator
+                # Cached SGS moments consistent with grid mean.
+                q_sat_mean = TD.q_vap_saturation(thp, T_mean, ρ)
+                λ = TD.liquid_fraction(thp, T_mean, q_lcl_mean, q_icl_mean)
+                # Use a generic excess for this functor-pattern smoke test.
+                excess = FT(1e-3)
+                M_l = max(FT(0), λ * excess - q_rai)
+                M_i = max(FT(0), (FT(1) - λ) * excess - q_sno)
+                M_scale = FT(1e-10)
+
+                # Create evaluator with shape-function inputs
                 evaluator = Microphysics1MEvaluator(
                     BMT.Microphysics1Moment(),
-                    mp, thp, ρ, T_mean,
-                    q_lcl_mean, q_icl_mean, q_rai, q_sno, q_lcl_mean, q_icl_mean, FT(1),
-                    FT(1), dt, nsubs_quad,
-                    (),  # Empty args tuple for 1-moment
+                    mp, thp, ρ,
+                    q_lcl_mean, q_icl_mean, q_rai, q_sno,
+                    λ, M_l, M_i, M_scale,
+                    dt, nsubs_quad,
+                    (),
                 )
 
                 # Verify it's a proper functor (not a closure)
@@ -641,14 +679,16 @@ using ClimaAtmos
                 tps = TD.Parameters.ThermodynamicsParameters(toml_dict)
                 mp = CMP.Microphysics1MParams(toml_dict)
 
-                # Grid-mean state
+                # Grid-mean state at saturation equilibrium so the in-cloud
+                # branch (which forces q_v = q_sat) reproduces direct BMT.
                 ρ = FT(1.2)
                 T_mean = FT(280.0)
-                q_tot = FT(0.01)
                 q_liq = FT(0.001)
                 q_ice = FT(0.0005)
                 q_rai = FT(0.0002)
                 q_sno = FT(0.0001)
+                q_sat_mean = TD.q_vap_saturation(tps, T_mean, ρ)
+                q_tot = q_sat_mean + q_liq + q_ice + q_rai + q_sno
 
                 # GridMeanSGS inside SGSQuadrature
                 quad_gm = ClimaAtmos.SGSQuadrature(
@@ -663,12 +703,21 @@ using ClimaAtmos
                 dt = FT(1.0)
                 nsubs_quad = 1
 
+                # Cached SGS moments consistent with the grid-mean equilibrium.
+                λ_gm = TD.liquid_fraction(tps, T_mean, q_liq, q_ice)
+                excess_gm = max(FT(0), q_tot - q_sat_mean)
+                moments_gm = (
+                    mu_S = excess_gm, sigma_S_sq = FT(0),
+                    M_l = max(FT(0), λ_gm * excess_gm - q_rai),
+                    M_i = max(FT(0), (FT(1) - λ_gm) * excess_gm - q_sno),
+                )
+
                 # Quadrature path
                 result_quad = microphysics_tendencies_1m(
                     BMT.Microphysics1Moment(),
                     quad_gm, mp, tps, ρ,
                     T_mean, q_tot, q_liq, q_ice, q_rai, q_sno,
-                    T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                    T′T′, q′q′, corr_Tq, moments_gm, dt, nsubs_quad,
                 )
 
                 # Direct BMT call
@@ -748,21 +797,33 @@ using ClimaAtmos
 
                     ρ = FT(1.0)
                     T = FT(280.0)
-                    q_tot = FT(0.015)
                     q_liq = FT(0.001)
                     q_ice = FT(0.0005)
                     q_rai = FT(0.0001)
                     q_sno = FT(0.00005)
+                    # Grid mean at saturation equilibrium so the cloudy branch
+                    # (which forces q_v = q_sat) matches direct BMT.
+                    q_sat_eq = TD.q_vap_saturation(thp, T, ρ)
+                    q_tot = q_sat_eq + q_liq + q_ice + q_rai + q_sno
                     dt = FT(1.0)
                     nsubs = 1
                     nsubs_quad = 1
+
+                    # Cached SGS moments consistent with the grid-mean equilibrium.
+                    λ_gm = TD.liquid_fraction(thp, T, q_liq, q_ice)
+                    excess_gm = max(FT(0), q_tot - q_sat_eq)
+                    moments_gm = (
+                        mu_S = excess_gm, sigma_S_sq = FT(0),
+                        M_l = max(FT(0), λ_gm * excess_gm - q_rai),
+                        M_i = max(FT(0), (FT(1) - λ_gm) * excess_gm - q_sno),
+                    )
 
                     # With zero variances, quadrature should match direct BMT
                     result_quad = ClimaAtmos.microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(),
                         quad, mp_1m, thp, ρ, T,
                         q_tot, q_liq, q_ice, q_rai, q_sno,
-                        FT(0), FT(0), FT(0), dt, nsubs_quad,
+                        FT(0), FT(0), FT(0), moments_gm, dt, nsubs_quad,
                     )
 
                     result_direct = BMT.average_bulk_microphysics_tendencies(
@@ -785,7 +846,7 @@ using ClimaAtmos
                         BMT.Microphysics1Moment(),
                         quad, mp_1m, thp, ρ, T,
                         q_tot, q_liq, q_ice, q_rai, q_sno,
-                        FT(4.0), FT(1e-5), FT(0.6), dt, nsubs_quad,
+                        FT(4.0), FT(1e-5), FT(0.6), moments_gm, dt, nsubs_quad,
                     )
                     for field in (:dq_lcl_dt, :dq_icl_dt, :dq_rai_dt, :dq_sno_dt)
                         @test isfinite(getfield(result_var, field))
@@ -837,6 +898,16 @@ using ClimaAtmos
         dt = FT(1.0)
         nsubs = 1
         nsubs_quad = 1
+
+        # Cached SGS moments for the perf test (any consistent value works).
+        q_sat_perf = TD.q_vap_saturation(thp, T, ρ)
+        λ_perf = TD.liquid_fraction(thp, T, q_lcl, q_icl)
+        excess_perf = max(FT(0), q_tot - q_sat_perf)
+        moments_perf = (
+            mu_S = excess_perf, sigma_S_sq = FT(0),
+            M_l = max(FT(0), λ_perf * excess_perf - q_rai),
+            M_i = max(FT(0), (FT(1) - λ_perf) * excess_perf - q_sno),
+        )
 
         N_warmup = 100
         N_bench = 10_000
@@ -938,14 +1009,14 @@ using ClimaAtmos
                     microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(), quad, mp_1m, thp, ρ, T,
                         q_tot, q_lcl, q_icl, q_rai, q_sno,
-                        T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                        T′T′, q′q′, corr_Tq, moments_perf, dt, nsubs_quad,
                     )
                 end
                 t = @elapsed for _ in 1:N_bench
                     microphysics_tendencies_1m(
                         BMT.Microphysics1Moment(), quad, mp_1m, thp, ρ, T,
                         q_tot, q_lcl, q_icl, q_rai, q_sno,
-                        T′T′, q′q′, corr_Tq, dt, nsubs_quad,
+                        T′T′, q′q′, corr_Tq, moments_perf, dt, nsubs_quad,
                     )
                 end
                 timings_1m[order] = t
