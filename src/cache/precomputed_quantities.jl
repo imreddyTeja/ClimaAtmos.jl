@@ -151,7 +151,7 @@ function precomputed_quantities(Y, atmos)
     ᶜcloud_fraction = similar(Y.c, FT)
     @. ᶜcloud_fraction = FT(0)
 
-    # SGS covariances for cloud fraction (Sommeria & Deardorff closure) and microphysics quadrature.
+    # SGS covariances for hybrid cloud fraction and microphysics quadrature.
     # NonEquilibriumMicrophysics1M/2M always route through the quadrature API
     # internally (with GridMeanSGS), so they also need covariance fields allocated.
     uses_sgs_quadrature =
@@ -159,11 +159,20 @@ function precomputed_quantities(Y, atmos)
         atmos.microphysics_model isa
         Union{NonEquilibriumMicrophysics1M, NonEquilibriumMicrophysics2M} ||
         atmos.cloud_model isa Union{QuadratureCloud, MLCloud}
+    SGSMomentsNT = @NamedTuple{
+        mu_S::FT, sigma_S_sq::FT, M_l::FT, M_i::FT,
+    }
+    # `ᶜsgs_moments` is written by `set_sgs_moments!` at the start of every
+    # Picard iteration (inside `set_covariance_cache_and_cloud_fraction!`) and
+    # is read only after that, so leaving it uninitialized here matches the
+    # pattern used for the other NamedTuple-valued caches (e.g.,
+    # `ᶜmp_tendency`). 
     covariance_quantities =
         uses_sgs_quadrature ?
         (;
             ᶜT′T′ = zeros(axes(Y.c)),
             ᶜq′q′ = zeros(axes(Y.c)),
+            ᶜsgs_moments = similar(Y.c, SGSMomentsNT),
         ) : (;)
     surface_precip_fluxes = (;
         surface_rain_flux = zeros(axes(Fields.level(Y.f, half))),
