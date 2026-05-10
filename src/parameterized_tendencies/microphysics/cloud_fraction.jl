@@ -81,6 +81,10 @@ function set_covariance_cache_and_cloud_fraction!(Y, p)
         # For EDMF: gradients are precomputed above.
         # For non-EDMF: gradients are computed inside set_covariance_cache!.
         set_covariance_cache!(Y, p, thermo_params)
+        # Refresh SGS moments from the latest variances so that the hybrid
+        # cloud fraction sees consistent (μ_S, σ_S²) at each Picard iteration.
+        # No-op when `ᶜsgs_moments` is not allocated.
+        set_sgs_moments!(Y, p)
         set_cloud_fraction!(Y, p, microphysics_model, cloud_model)
         return nothing
     end
@@ -122,6 +126,12 @@ function set_covariance_cache_and_cloud_fraction!(Y, p)
         ᶜlg,
     )
     set_covariance_cache!(Y, p, thermo_params)
+
+    # Final SGS moments refresh against the post-Aitken variance closure.
+    # The microphysics tendency (which reads `ᶜsgs_moments` for the
+    # shape-function partition) runs downstream and needs moments aligned
+    # with the accepted cloud fraction.
+    set_sgs_moments!(Y, p)
 
     return nothing
 end
@@ -246,176 +256,265 @@ end
 
 
 # ============================================================================
-# Cloud Fraction: Sommeria-Deardorff Moment Matching
+# SGS Moments — pre-pass quadrature shared by CF and microphysics
 # ============================================================================
+#
+# A single Gauss-Hermite pass over the SGS PDF (no BMT calls) caches the
+# moments `(μ_S, σ_S², M_l, M_i)` of the saturation variable and the
+# equilibrium cloud condensate. Consumers:
+#
+#   - `compute_cloud_fraction_hybrid` reads `(μ_S, σ_S²)` for the smooth
+#     logistic-CDF cloud fraction, replacing the Sommeria-Deardorff
+#     linearization of the saturation-deficit variance.
+#
+#   - `Microphysics1MEvaluator` reads `(M_l, M_i)` for the shape-function
+#     partition `q_lcl_hat = q_lcl_mean · (γ_l · q_lcl_eq_hat + β_l)`,
+#     which conserves `⟨q_lcl_hat⟩ = q_lcl_mean` by construction.
+#
+# Both consumers share the same SGS PDF as this pre-pass, so the closures
+# are mutually consistent.
 
 """
-    compute_cloud_fraction_sd(
-        thermo_params, T, ρ, q_tot, q_liq, q_ice, T′T′, q′q′, corr_Tq,
-        cf_steepness_scale, q_min, sgs_dist
+    SGSMomentsType{FT}
+
+NamedTuple type alias for the per-cell SGS moments cache. Field semantics:
+
+- `mu_S`: Mean of the saturation variable `S(ξ)` over the SGS PDF.
+- `sigma_S_sq`: Variance of `S(ξ)` over the SGS PDF.
+- `M_l`: Mean of the equilibrium cloud-liquid condensate over the SGS PDF
+  (`⟨max(0, λ·(q_tot_hat − q_sat(T_hat)) − q_rai)⟩`).
+- `M_i`: Mean of the equilibrium cloud-ice condensate over the SGS PDF.
+
+The saturation variable `S` depends on the SGS distribution:
+- `GaussianSGS`, `GridMeanSGS`: `S = q_tot − q_sat(T)` (linear saturation excess; units of `q`).
+- `LogNormalSGS`: `S = log(q_tot / q_sat(T))` (dimensionless log-ratio).
+
+`M_l` and `M_i` are always in linear units of specific humidity, regardless
+of the SGS distribution.
+"""
+const SGSMomentsType{FT} = @NamedTuple{
+    mu_S::FT, sigma_S_sq::FT, M_l::FT, M_i::FT,
+} where {FT}
+
+"""
+    SGSMomentsEvaluator(dist, tps, ρ, λ, q_rai, q_sno, q_min)
+
+GPU-safe functor that, given a quadrature point `(T_hat, q_tot_hat)`, returns
+the moment-integrand contributions
+`(mu_S = S(ξ), s_sq = S(ξ)², M_l = q_lcl_eq(ξ), M_i = q_icl_eq(ξ))` to be
+averaged by `integrate_over_sgs`. See [`SGSMomentsType`](@ref) for field
+semantics and distribution-dependent definitions.
+
+The prognostic-state liquid fraction `λ` is held fixed across all quadrature
+points of the same cell. Rain and snow specific humidities are subtracted in the
+equilibrium-condensate definition so that
+`q_lcl_eq + q_icl_eq + q_rai + q_sno = excess` (mass-conserving partition of
+the saturation excess at the quadrature point).
+
+# Fields
+- `dist`: SGS distribution type (controls the saturation variable form).
+- `tps`: Thermodynamics parameters.
+- `ρ`: Air density [kg/m³].
+- `λ`: Prognostic liquid fraction (fixed across quadrature).
+- `q_rai`, `q_sno`: Grid-mean rain and snow specific humidities [kg/kg].
+- `q_min`: Lower bound for log-argument regularization (lognormal case).
+"""
+struct SGSMomentsEvaluator{D, TPS, FT}
+    dist::D
+    tps::TPS
+    ρ::FT
+    λ::FT
+    q_rai::FT
+    q_sno::FT
+    q_min::FT
+end
+
+# Linear saturation excess (Gaussian / GridMean SGS distributions)
+@inline _saturation_variable(
+    ::Union{GaussianSGS, GridMeanSGS}, q_tot, q_sat, q_min,
+) = q_tot - q_sat
+# Log saturation ratio (Lognormal SGS distribution); arguments regularized
+# at `q_min` to prevent `log(0)` in dry / extreme states.
+@inline _saturation_variable(::LogNormalSGS, q_tot, q_sat, q_min) =
+    log(max(q_tot, q_min) / max(q_sat, q_min))
+
+@inline function (eval::SGSMomentsEvaluator)(T_hat, q_tot_hat)
+    FT = typeof(eval.ρ)
+    q_sat_hat = TD.q_vap_saturation(eval.tps, T_hat, eval.ρ)
+    s = _saturation_variable(eval.dist, q_tot_hat, q_sat_hat, eval.q_min)
+    excess = max(FT(0), q_tot_hat - q_sat_hat)
+    q_lcl_eq = max(FT(0), eval.λ * excess - eval.q_rai)
+    q_icl_eq = max(FT(0), (FT(1) - eval.λ) * excess - eval.q_sno)
+    return (mu_S = s, s_sq = s * s, M_l = q_lcl_eq, M_i = q_icl_eq)
+end
+
+"""
+    compute_sgs_moments(thp, ρ, T_mean, q_tot_mean,
+                          q_lcl, q_icl, q_rai, q_sno,
+                          sgs_quad, T′T′, q′q′, corr_Tq, q_min)
+
+Compute SGS moments via one cheap quadrature pass (no BMT calls). Returns a
+[`SGSMomentsType`](@ref) `NamedTuple` of moments
+`(mu_S, sigma_S_sq, M_l, M_i)`.
+
+The variance is computed as `Var(S) = ⟨S²⟩ − ⟨S⟩²` and clamped to be
+non-negative.
+
+Handles all SGS distribution types:
+- `Nothing` or `GridMeanSGS`: collapses to a single grid-mean evaluation.
+- `GaussianSGS`: linear saturation-deficit moments.
+- `LogNormalSGS`: log-saturation-ratio moments.
+
+Used by `set_covariance_cache_and_cloud_fraction!` once per Picard iteration
+to cache moments alongside the variance closure outputs `(T′T′, q′q′)`.
+"""
+@inline function compute_sgs_moments(
+    thp, ρ, T_mean, q_tot_mean,
+    q_lcl, q_icl, q_rai, q_sno,
+    sgs_quad, T′T′, q′q′, corr_Tq, q_min,
+)
+    FT = typeof(ρ)
+    sgs_quad_eff = isnothing(sgs_quad) ? GridMeanSGS() : sgs_quad
+    dist = sgs_quad_eff isa SGSQuadrature ? sgs_quad_eff.dist : sgs_quad_eff
+    q_lcl_nn = max(FT(0), q_lcl)
+    q_icl_nn = max(FT(0), q_icl)
+    q_rai_nn = max(FT(0), q_rai)
+    q_sno_nn = max(FT(0), q_sno)
+    λ = TD.liquid_fraction(thp, T_mean, q_lcl_nn, q_icl_nn)
+    evaluator = SGSMomentsEvaluator(dist, thp, ρ, λ, q_rai_nn, q_sno_nn, q_min)
+    raw = integrate_over_sgs(
+        evaluator, sgs_quad_eff, q_tot_mean, T_mean, q′q′, T′T′, corr_Tq,
+    )
+    sigma_S_sq = max(raw.s_sq - raw.mu_S * raw.mu_S, ϵ_numerics(FT))
+    return (
+        mu_S = raw.mu_S,
+        sigma_S_sq = sigma_S_sq,
+        M_l = raw.M_l,
+        M_i = raw.M_i,
+    )::SGSMomentsType{FT}
+end
+
+
+# ============================================================================
+# Cloud Fraction: Hybrid (quadrature-moment + analytic CDF)
+# ============================================================================
+#
+# Smooth logistic-CDF approximation evaluated against the cached SGS moments
+# `(μ_S, σ_S²)` produced by `compute_sgs_moments`. The variance and saturation
+# mean come directly from the Gauss-Hermite quadrature over the same SGS PDF
+# that microphysics integrates over, giving consistency between the cloud
+# fraction and the microphysics tendencies by construction. The activation
+# factor ensures `cf → 0` in clear subsaturated states regardless of SGS
+# spread.
+#
+# Dispatched on the SGS distribution via `_effective_excess_hybrid`:
+#   - Gaussian/GridMean: linear coords, `Q_eff = q_c + min(0, μ_S)`.
+#   - Lognormal: log coords, `Q_eff = log(1 + q_c/q_v_sat) + min(0, μ_S)`.
+# The lognormal branch handles the heavy upper tail of `q_tot` in a
+# principled way.
+
+"""
+    compute_cloud_fraction_hybrid(
+        thermo_params, T, ρ, q_tot, q_liq, q_ice,
+        moments, cf_steepness_scale, q_min, sgs_dist,
     )
 
-Compute cloud fraction using the Sommeria & Deardorff (1977) approach, but with 
-moment-matching to obtain the cloud fraction given condensate specific humidities 
-(rather than jointly determining condensate specific humidities and cloud fraction, 
-as in the original approach).
-
-Given grid-mean condensate (`q_liq`, `q_ice`) and the subgrid variances and
-correlation of `(T, q_tot)`, the cloud fraction is determined by approximately
-matching the predicted condensate to the width of the subgrid saturation deficit PDF.
+Compute cloud fraction from cached SGS moments. The variance and mean of
+the saturation variable are taken from the pre-pass quadrature
+(`compute_sgs_moments`); only the smooth CDF approximation and the
+activation factor are evaluated here.
 
 # Algorithm
-1. Compute phase-specific saturation specific humidities and
-   Clausius-Clapeyron slopes `b = ∂q_sat/∂T = L·q_sat / (R_v·T²)`.
-2. Compute the SGS variance of the saturation deficit:
-   `σ_s² = σ_q² + b²·σ_T² − 2b·corr(T,q)·σ_T·σ_q`
-3. Normalize grid-mean condensate by the PDF width: `Q̂ = q_cond / σ_s`.
-4. Approximate the Gaussian CDF with `tanh(π/√6 · Q̂)` and match implied condensate 
-   from supersaturation to obtain cloud fraction.
-5. Merge liquid and ice via maximum overlap: `cf = max(cf_l, cf_i)`.
-6. Enforce zero cloud fraction when no condensate exists.
-
-With zero variance the function returns 0 when no condensate exists and
-1 when condensate is present, recovering the grid-scale behaviour.
+1. Activation factor on linear grid-mean excess:
+   `α = clamp(q_c / √((q_t − q_sat)_+² + q_min²), 0, 1)` with
+   `q_sat = q_vap_saturation(T, ρ)`. As `q_c → 0` in a clear subdomain,
+   `α → 0` and the cloud fraction goes smoothly to zero.
+2. Activation-scaled SGS standard deviation: `σ_qc = α √(σ_S²)`.
+3. Effective excess `Q_eff` from cached `μ_S`, dispatched on `sgs_dist`:
+   - Gaussian/GridMean: `Q_eff = q_c + min(0, μ_S)` (linear coordinates).
+   - Lognormal: `Q_eff = log(1 + q_c/q_v_sat) + min(0, μ_S)` (log coordinates).
+4. Cloud fraction via variance-matched logistic CDF
+   (`erf(x/√2) ≈ tanh((π/(2√3)) x)`):
+   `f_c = ½ [1 + tanh(c_f · Q_eff / σ_qc)]` with
+   `c_f = (π/(2√3)) · cf_steepness_scale`.
+5. Branchless gate: `f_c = 0` when no prognostic condensate is present.
 
 # Arguments
-- `thermo_params`: Thermodynamics parameters
-- `T`: Grid-mean temperature [K]
-- `ρ`: Air density [kg/m³]
-- `q_tot`: Grid-mean total specific humidity [kg/kg]
-- `q_liq`: Grid-mean cloud liquid [kg/kg]
-- `q_ice`: Grid-mean cloud ice [kg/kg]
-- `T′T′`: Temperature variance [K²]
-- `q′q′`: Moisture variance [(kg/kg)²]
-- `corr_Tq`: Correlation coefficient corr(T', q')
-- `cf_steepness_scale`: Scaling factor for the steepness of the cloud fraction transition versus condensate (default 1).
-- `q_min`: Minimum specific humidity threshold [kg/kg] (from ClimaParams `specific_humidity_minimum`).
-- `sgs_dist`: Assumed sub-grid scale distribution type (`GaussianSGS`, `LogNormalSGS`, or `GridMeanSGS`).
+- `thermo_params`: Thermodynamics parameters.
+- `T`: Grid-mean temperature [K].
+- `ρ`: Air density [kg/m³].
+- `q_tot`: Grid-mean total specific humidity [kg/kg].
+- `q_liq`, `q_ice`: Grid-mean cloud condensate [kg/kg].
+- `moments`: Cached `SGSMomentsType` `(mu_S, sigma_S_sq, M_l, M_i)`.
+- `cf_steepness_scale`: Tunable steepness factor `c_f` (default 1).
+- `q_min`: Minimum specific humidity threshold [kg/kg].
+- `sgs_dist`: SGS distribution (`GaussianSGS`, `LogNormalSGS`, `GridMeanSGS`).
 
 # Returns
-Cloud fraction ∈ [0, 1]
+Cloud fraction ∈ [0, 1].
 """
-@inline function compute_cloud_fraction_sd(
+@inline function compute_cloud_fraction_hybrid(
     thermo_params,
     T,
     ρ,
     q_tot,
     q_liq,
     q_ice,
-    T′T′,
-    q′q′,
-    corr_Tq,
+    moments,
     cf_steepness_scale,
     q_min,
     sgs_dist::AbstractSGSDistribution,
 )
     FT = eltype(thermo_params)
 
-    # --- 1. Thermodynamic sensitivities (Clausius-Clapeyron) ---
-    qsat_l = TD.q_vap_saturation(thermo_params, T, ρ, TD.Liquid())
-    qsat_i = TD.q_vap_saturation(thermo_params, T, ρ, TD.Ice())
+    q_c = q_liq + q_ice
 
-    R_v = TD.Parameters.R_v(thermo_params)
-    L_v = TD.latent_heat_vapor(thermo_params, T)
-    L_s = TD.latent_heat_sublim(thermo_params, T)
+    # --- 1. Activation factor: linear excess at grid mean
+    q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
+    excess_eq = max(zero(FT), q_tot - q_sat)
+    α = min(FT(1), q_c / sqrt(excess_eq * excess_eq + q_min * q_min))
 
-    # b = ∂q_sat/∂T  (Clausius-Clapeyron slope, assuming constant pressure)
-    b_l = L_v * qsat_l / (R_v * T^2)
-    b_i = L_s * qsat_i / (R_v * T^2)
+    # --- 2. Activation-scaled SGS standard deviation
+    σ_S = sqrt(max(moments.sigma_S_sq, ϵ_numerics(FT)))
+    σ_qc = α * σ_S
 
-    # Standard deviations
-    σ_q = sqrt(max(q′q′, zero(FT)))
-    σ_T = sqrt(max(T′T′, zero(FT)))
+    # --- 3. Effective excess Q_eff in the coordinate of the SGS distribution
+    Q_eff =
+        _effective_excess_hybrid(q_c, q_sat, moments.mu_S, q_min, sgs_dist)
 
-    # --- 2. SGS variance of saturation deficit ---
-    # σ_s² = σ_q² + b²·σ_T² − 2b·corr(T', q')·σ_T·σ_q
-    sig2_l = q′q′ + b_l * b_l * T′T′ - FT(2) * b_l * corr_Tq * σ_T * σ_q
-    sig2_i = q′q′ + b_i * b_i * T′T′ - FT(2) * b_i * corr_Tq * σ_T * σ_q
+    # --- 4. Logistic-CDF approximation
+    coeff = (FT(π) / (FT(2) * sqrt(FT(3)))) * cf_steepness_scale
+    σ_safe = max(σ_qc, ϵ_numerics(FT))
+    cf = FT(0.5) * (FT(1) + tanh(coeff * Q_eff / σ_safe))
 
-    # Safety floor
-    sig_l = sqrt(max(sig2_l, ϵ_numerics(FT)))
-    sig_i = sqrt(max(sig2_i, ϵ_numerics(FT)))
-
-    # --- 3. Normalize condensate by PDF width ---
-    Q_hat_l = q_liq / sig_l
-    Q_hat_i = q_ice / sig_i
-
-    # --- 4. Formulation-Specific Cloud Fraction Helpers ---
-    cf_l =
-        _cloud_fraction_helper(Q_hat_l, sig_l, q_tot, cf_steepness_scale, q_min, sgs_dist)
-    cf_i =
-        _cloud_fraction_helper(Q_hat_i, sig_i, q_tot, cf_steepness_scale, q_min, sgs_dist)
-
-    # --- 5. Maximum overlap ---
-    cf = max(cf_l, cf_i)
-
-    # --- 6. No condensate → no cloud (branchless) ---
-    has_cond = TD.has_condensate(thermo_params, q_liq + q_ice)
+    # --- 5. Branchless gate: no prognostic condensate → no cloud
+    has_cond = TD.has_condensate(thermo_params, q_c)
     return ifelse(has_cond, cf, zero(FT))
 end
 
 """
-    _cloud_fraction_helper(Q_hat, sig_s, q_tot, cf_steepness_scale, q_min, sgs_dist)
+    _effective_excess_hybrid(q_c, q_sat, μ_S, q_min, sgs_dist)
 
-Compute the phase-specific cloud fraction from normalized condensate.
+Distribution-specific effective excess `Q_eff` used by the hybrid cloud
+fraction. Combines the prognostic condensate with the quadrature-derived
+mean of the saturation variable so that `cf → 0` smoothly in subsaturated
+states even when a numerical trace of prognostic condensate remains.
 
-# Arguments
-- `Q_hat`: Condensate normalized by the standard deviation of saturation deficit
-- `sig_s`: Standard deviation of saturation deficit [kg/kg]
-- `q_tot`: Grid-mean total specific humidity [kg/kg]
-- `cf_steepness_scale`: Scaling factor for the steepness of the cloud fraction transition versus condensate
-- `q_min`: Minimum specific humidity threshold [kg/kg]
-- `sgs_dist`: Assumed sub-grid scale distribution type (`GaussianSGS`, `LogNormalSGS`, or `GridMeanSGS`)
-
-# Returns
-- Phase-specific cloud fraction ∈ [0, 1]
+- `GaussianSGS`, `GridMeanSGS`: linear coordinates,
+  `Q_eff = q_c + min(0, μ_S)`.
+- `LogNormalSGS`: log coordinates,
+  `Q_eff = log(1 + q_c/q_v_sat) + min(0, μ_S)` (regularized at `q_min`).
 """
-@inline function _cloud_fraction_helper(
-    Q_hat,
-    sig_s,
-    q_tot,
-    cf_steepness_scale,
-    q_min,
-    ::GaussianSGS,
+@inline _effective_excess_hybrid(
+    q_c, q_sat, μ_S, q_min, ::Union{GaussianSGS, GridMeanSGS},
+) = q_c + min(zero(typeof(q_c)), μ_S)
+
+@inline function _effective_excess_hybrid(
+    q_c, q_sat, μ_S, q_min, ::LogNormalSGS,
 )
-    FT = typeof(Q_hat)
-    # Analytical CDF approximation: π/√6 matches the variance of the logistic distribution to the normal distribution
-    coeff = (FT(π) / sqrt(FT(6))) * cf_steepness_scale
-    return tanh(coeff * Q_hat)
-end
-
-@inline function _cloud_fraction_helper(
-    Q_hat,
-    sig_s,
-    q_tot,
-    cf_steepness_scale,
-    q_min,
-    ::LogNormalSGS,
-)
-    FT = typeof(Q_hat)
-    # Coefficient of variation (protect against division by zero)
-    C_v = sig_s / max(q_tot, q_min)
-
-    # Base coefficient corresponds to Gaussian limit (Cv -> 0)
-    coeff = (FT(π) / sqrt(FT(6))) * cf_steepness_scale
-
-    # Modulate coefficient with Cv based on offline optimal fits to lognormal 
-    # distribution for q_tot (RMSE < 5% for C_v in [0, 1])
-    c = coeff * (FT(1) + FT(0.3) * C_v)
-
-    return tanh(c * Q_hat)
-end
-
-@inline function _cloud_fraction_helper(
-    Q_hat,
-    sig_s,
-    q_tot,
-    cf_steepness_scale,
-    q_min,
-    ::GridMeanSGS,
-)
-    FT = typeof(Q_hat)
-    return Q_hat > zero(FT) ? FT(1) : zero(FT)
+    FT = typeof(q_c)
+    q_v_sat_safe = max(q_sat, q_min)
+    return log(FT(1) + q_c / q_v_sat_safe) + min(zero(FT), μ_S)
 end
 
 # ============================================================================
@@ -430,7 +529,8 @@ Compute and store grid-scale cloud fraction based on sub-grid scale properties.
 Dispatches on `microphysics_model` and `cloud_model`:
 - `DryModel`: Cloud fraction and cloud condensate are zero.
 - `GridScaleCloud`: Cloud fraction is 1 if grid-scale condensate exists, 0 otherwise.
-- `QuadratureCloud`: Cloud fraction from Sommeria-Deardorff moment matching.
+- `QuadratureCloud`: Cloud fraction from the hybrid quadrature-moment formula
+  (`compute_cloud_fraction_hybrid`).
 - `MLCloud`: Cloud fraction from neural network.
 
 For EDMF turbulence models, updraft contributions are added to the environment values.
@@ -471,27 +571,28 @@ NVTX.@annotate function set_cloud_fraction!(
     # Get condensate means (dispatches on microphysics_model)
     ᶜq_lcl, ᶜq_icl = _get_condensate_means(Y, p, turbconv_model, microphysics_model)
 
-    # Get T-based variances from cache
-    (; ᶜT′T′, ᶜq′q′) = p.precomputed
-
     sgs_dist =
         isnothing(p.atmos.sgs_quadrature) ? GaussianSGS() :
         p.atmos.sgs_quadrature.dist
 
-    corr_Tq = correlation_Tq(p.params)
     cf_steepness_scale = CAP.cloud_fraction_steepness_scale(p.params)
     q_min = CAP.q_min(p.params)
 
-    @. p.precomputed.ᶜcloud_fraction = compute_cloud_fraction_sd(
+    # Hybrid cloud fraction from cached SGS moments. The `ᶜsgs_moments`
+    # field is allocated whenever `QuadratureCloud` is active (see
+    # `uses_sgs_quadrature` in precomputed_quantities.jl) and refreshed
+    # at the start of each Picard step in
+    # `set_covariance_cache_and_cloud_fraction!`.
+    (; ᶜsgs_moments) = p.precomputed
+
+    @. p.precomputed.ᶜcloud_fraction = compute_cloud_fraction_hybrid(
         thermo_params,
         ᶜT_mean,
         ᶜρ_env,
         ᶜq_mean,
         ᶜq_lcl,
         ᶜq_icl,
-        ᶜT′T′,
-        ᶜq′q′,
-        corr_Tq,
+        ᶜsgs_moments,
         cf_steepness_scale,
         q_min,
         sgs_dist,
@@ -528,8 +629,71 @@ NVTX.@annotate function set_cloud_fraction!(
     _apply_edmf_cloud_weighting!(Y, p, turbconv_model, thermo_params)
 end
 
+"""
+    set_sgs_moments!(Y, p)
+
+Compute and cache SGS moments `(mu_S, sigma_S_sq, M_l, M_i)` into
+`p.precomputed.ᶜsgs_moments` via one pre-pass over the SGS quadrature
+(no BMT calls). The cached moments are consumed by:
+
+- `compute_cloud_fraction_hybrid` (via `set_cloud_fraction!(QuadratureCloud)`),
+  which uses `(mu_S, sigma_S_sq)` directly in the smooth logistic-CDF
+  cloud fraction.
+- `Microphysics1MEvaluator` (via `microphysics_tendencies_1m`), which uses
+  `(M_l, M_i)` in the shape-function partition that distributes prognostic
+  condensate across quadrature points while exactly conserving
+  `⟨q_lcl_hat⟩ = q_lcl_mean`.
+
+Called once per Picard iteration of `set_covariance_cache_and_cloud_fraction!`
+(so cloud fraction sees moments matching the current variance closure), then
+once more after the Aitken-accelerated cloud fraction update so the
+downstream microphysics step sees the converged moments.
+
+No-op when `ᶜsgs_moments` is not allocated (e.g., for `DryModel` with
+`GridScaleCloud` and no quadrature-using microphysics scheme).
+
+Uses grid-mean `(ρ, T, q_tot)`; for schemes with prognostic precipitation
+(`NonEquilibriumMicrophysics1M`, `NonEquilibriumMicrophysics2M`),
+grid-mean specific `q_rai, q_sno` are extracted from the prognostic
+state. Other schemes pass `q_rai = q_sno = 0`.
+
+For EDMF configurations, this currently uses grid-mean covariances and
+state. A future refinement could use environment-only covariances.
+"""
+NVTX.@annotate function set_sgs_moments!(Y, p)
+    hasproperty(p.precomputed, :ᶜsgs_moments) || return nothing
+
+    FT = eltype(p.params)
+    thermo_params = CAP.thermodynamics_params(p.params)
+    (; ᶜT, ᶜq_tot_nonneg, ᶜq_liq, ᶜq_ice) = p.precomputed
+    (; ᶜT′T′, ᶜq′q′, ᶜsgs_moments) = p.precomputed
+    sgs_quad = p.atmos.sgs_quadrature
+    corr_Tq = correlation_Tq(p.params)
+    q_min = CAP.q_min(p.params)
+    microphysics_model = p.atmos.microphysics_model
+
+    if microphysics_model isa
+       Union{NonEquilibriumMicrophysics1M, NonEquilibriumMicrophysics2M}
+        ᶜq_rai = @. lazy(specific(Y.c.ρq_rai, Y.c.ρ))
+        ᶜq_sno = @. lazy(specific(Y.c.ρq_sno, Y.c.ρ))
+        @. ᶜsgs_moments = compute_sgs_moments(
+            thermo_params, Y.c.ρ, ᶜT, ᶜq_tot_nonneg,
+            ᶜq_liq, ᶜq_ice, ᶜq_rai, ᶜq_sno,
+            sgs_quad, ᶜT′T′, ᶜq′q′, corr_Tq, q_min,
+        )
+    else
+        # No prognostic q_rai / q_sno; pass scalar zero (broadcast-expanded).
+        @. ᶜsgs_moments = compute_sgs_moments(
+            thermo_params, Y.c.ρ, ᶜT, ᶜq_tot_nonneg,
+            ᶜq_liq, ᶜq_ice, FT(0), FT(0),
+            sgs_quad, ᶜT′T′, ᶜq′q′, corr_Tq, q_min,
+        )
+    end
+    return nothing
+end
+
 # ============================================================================
-# Internal Helper Functions  
+# Internal Helper Functions
 # ============================================================================
 
 """
@@ -692,7 +856,7 @@ function _apply_edmf_cloud_weighting!(Y, p, turbconv_model, thermo_params)
 
     # Weight by environment area fraction if using PrognosticEDMFX (assumed 1 otherwise)
     if turbconv_model isa PrognosticEDMFX
-        ᶜρa⁰ = @. lazy(ρa⁰(Y.c.ρ, Y.c.sgsʲs, p.atmos.turbconv_model))
+        ᶜρa⁰ = @. lazy(ρa⁰(Y.c.ρ, Y.c.sgsʲs, turbconv_model))
         (; ᶜT⁰, ᶜq_tot_nonneg⁰, ᶜq_liq⁰, ᶜq_ice⁰) = p.precomputed
         ᶜρ⁰ = @. lazy(
             TD.air_density(
