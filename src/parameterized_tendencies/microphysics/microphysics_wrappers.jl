@@ -171,21 +171,20 @@ quadrature points using a **shape-function partition** of cloud condensate.
 At each quadrature point `(T_hat, q_tot_hat)` sampled from the SGS PDF,
 the local cloud condensate is constructed as
 
-    q_lcl_hat = q_lcl_mean · (γ_l · q_lcl_eq_hat + β_l)
+    q_lcl_hat = q_lcl_mean + q_lcl_mean · γ_l · (q_lcl_eq_hat - M_l)
 
 where
 - `q_lcl_eq_hat = max(0, λ·(q_tot_hat − q_sat(T_hat)) − q_rai)` is the
   *local* equilibrium cloud liquid at the quadrature point, with `λ` held
   fixed at the grid-mean liquid fraction.
-- `γ_l = M_l / (M_scale² + M_l²)` and `β_l = M_scale² / (M_scale² + M_l²)`
-  satisfy `γ_l · M_l + β_l = 1`, giving **exact mass conservation by
-  construction**: `⟨q_lcl_hat⟩ = q_lcl_mean · (γ_l · M_l + β_l) = q_lcl_mean`.
+- `γ_l = M_l / (M_scale² + M_l²)` guarantees **exact mass conservation by
+  construction**: `⟨q_lcl_hat⟩ = q_lcl_mean + q_lcl_mean · γ_l · (⟨q_lcl_eq⟩ - M_l) = q_lcl_mean`.
   `M_l = ⟨q_lcl_eq⟩` is the SGS-mean equilibrium liquid moment supplied by
   the `compute_sgs_moments` pre-pass.
-- `M_scale = q_min` sets the β-blending crossover. In the typical regime
-  `M_l ≫ q_min`, β_l ≈ 0 and `q_lcl_hat = (q_lcl_mean/M_l) · q_lcl_eq_hat`
+- `M_scale = q_min` sets the blending crossover. In the typical regime
+  `M_l ≫ q_min`, `γ_l ≈ 1/M_l` and `q_lcl_hat ≈ (q_lcl_mean/M_l) · q_lcl_eq_hat`
   (pure shape function); in the stale-cloud edge case `M_l → 0` while
-  `q_lcl_mean > 0`, `β_l → 1` and `q_lcl_hat → q_lcl_mean` (uniform
+  `q_lcl_mean > 0`, `γ_l → 0` and `q_lcl_hat → q_lcl_mean` (uniform
   fallback). The ice channel is symmetric.
 
 The shape function unifies the cloudy and clear contributions into a
@@ -219,9 +218,9 @@ struct Microphysics1MEvaluator{S, MP, TPS, FT, Args <: Tuple}
     # Shape-function inputs from the SGS moments pre-pass
     λ::FT          # liquid fraction (held fixed across quadrature)
     γ_l::FT        # precomputed shape-function coefficient for liquid
-    β_l::FT        # precomputed shape-function blend for liquid
+    M_l::FT        # SGS-mean equilibrium liquid condensate
     γ_i::FT        # precomputed shape-function coefficient for ice
-    β_i::FT        # precomputed shape-function blend for ice
+    M_i::FT        # SGS-mean equilibrium ice condensate
     # Numerical parameters
     dt::FT
     nsubs::Int
@@ -238,8 +237,8 @@ end
     q_lcl_eq_hat = max(FT(0), eval.λ * excess_hat - eval.q_rai)
     q_icl_eq_hat = max(FT(0), (FT(1) - eval.λ) * excess_hat - eval.q_sno)
 
-    q_lcl_hat = eval.q_lcl_mean * (eval.γ_l * q_lcl_eq_hat + eval.β_l)
-    q_icl_hat = eval.q_icl_mean * (eval.γ_i * q_icl_eq_hat + eval.β_i)
+    q_lcl_hat = eval.q_lcl_mean + eval.q_lcl_mean * eval.γ_l * (q_lcl_eq_hat - eval.M_l)
+    q_icl_hat = eval.q_icl_mean + eval.q_icl_mean * eval.γ_i * (q_icl_eq_hat - eval.M_i)
 
     return BMT.average_bulk_microphysics_tendencies(
         eval.scheme, eval.mp, eval.tps, eval.ρ, T_hat, q_tot_hat,
@@ -340,14 +339,12 @@ end
     denom_l = M_sq + M_l * M_l
     denom_i = M_sq + M_i * M_i
     γ_l = M_l / denom_l
-    β_l = M_sq / denom_l
     γ_i = M_i / denom_i
-    β_i = M_sq / denom_i
 
     evaluator = Microphysics1MEvaluator(
         scheme, cmp, thp, ρ,
         q_lcl_nonneg, q_icl_nonneg, q_rai_nonneg, q_sno_nonneg,
-        λ, γ_l, β_l, γ_i, β_i,
+        λ, γ_l, M_l, γ_i, M_i,
         dt, nsubs, args,
     )
     return integrate_over_sgs(
