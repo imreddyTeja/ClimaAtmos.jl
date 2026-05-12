@@ -1,4 +1,4 @@
-342
+343
 
 # **README**
 #
@@ -32,6 +32,11 @@
 # 3) (optional) leave a link to the buildkite run that prompted this ref counter bump.
 
 #=
+343
+- Unify cloud fraction and microphysics quadrature via a shared sgs_moments
+  pre-pass; replace Sommeria-Deardorff cloud fraction with hybrid logistic-CDF;
+  use shape-function partition in 1M microphysics for exact mass conservation.
+
 342
 - Add physical constrains callback for diagnostic EDMF
 

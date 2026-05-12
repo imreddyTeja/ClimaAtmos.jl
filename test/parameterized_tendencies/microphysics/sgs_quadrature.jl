@@ -633,12 +633,22 @@ using ClimaAtmos
                 M_i = max(FT(0), (FT(1) - λ) * excess - q_sno)
                 M_scale = FT(1e-10)
 
-                # Create evaluator with shape-function inputs
+                # Precompute shape-function coefficients, matching
+                # microphysics_tendencies_1m production code.
+                M_sq = M_scale * M_scale
+                denom_l = M_sq + M_l * M_l
+                denom_i = M_sq + M_i * M_i
+                γ_l = M_l / denom_l
+                β_l = M_sq / denom_l
+                γ_i = M_i / denom_i
+                β_i = M_sq / denom_i
+
+                # Create evaluator with precomputed shape-function coefficients
                 evaluator = Microphysics1MEvaluator(
                     BMT.Microphysics1Moment(),
                     mp, thp, ρ,
                     q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                    λ, M_l, M_i, M_scale,
+                    λ, γ_l, β_l, γ_i, β_i,
                     dt, nsubs_quad,
                     (),
                 )
