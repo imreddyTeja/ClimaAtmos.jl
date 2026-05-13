@@ -426,7 +426,8 @@ activation factor are evaluated here.
 
 # Algorithm
 1. Activation factor on linear excess from cached moments:
-   `α = clamp(q_c / √((μ_S)_+² + q_min²), 0, 1)`.
+   `α = clamp(q_c / √((μ_{lin})_+² + q_min²), 0, 1)` where `μ_{lin}` is
+   the saturation excess (kg/kg) derived from `μ_S`.
 2. Activation-scaled SGS standard deviation: `σ_qc = α √(σ_S²)`.
 3. Effective excess `Q_eff` from cached `μ_S`, dispatched on `sgs_dist`:
    - Gaussian/GridMean: `Q_eff = q_c + min(0, μ_S)` (linear coordinates).
@@ -469,7 +470,10 @@ Cloud fraction ∈ [0, 1].
     q_c = q_liq + q_ice
 
     # --- 1. Activation factor: linear excess from cached quadrature moments
-    excess_eq = max(zero(FT), moments.mu_S)
+    # We recover the linear excess (kg/kg) from the distribution-specific μ_S.
+    q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
+    linear_mu = sgs_dist isa LogNormalSGS ? q_sat * (exp(moments.mu_S) - FT(1)) : moments.mu_S
+    excess_eq = max(zero(FT), linear_mu)
     α = min(FT(1), q_c / sqrt(excess_eq * excess_eq + q_min * q_min))
 
     # --- 2. Activation-scaled SGS standard deviation
@@ -477,7 +481,6 @@ Cloud fraction ∈ [0, 1].
     σ_qc = α * σ_S
 
     # --- 3. Effective excess Q_eff in the coordinate of the SGS distribution
-    q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
     Q_eff =
         _effective_excess_hybrid(q_c, q_sat, moments.mu_S, q_min, sgs_dist)
 
