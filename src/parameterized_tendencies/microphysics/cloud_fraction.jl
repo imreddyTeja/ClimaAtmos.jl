@@ -472,7 +472,8 @@ Cloud fraction ∈ [0, 1].
     # --- 1. Activation factor: linear excess from cached quadrature moments
     # We recover the linear excess (kg/kg) from the distribution-specific μ_S.
     q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
-    linear_mu = sgs_dist isa LogNormalSGS ? q_sat * (exp(moments.mu_S) - FT(1)) : moments.mu_S
+    linear_mu =
+        sgs_dist isa LogNormalSGS ? q_sat * (exp(moments.mu_S) - FT(1)) : moments.mu_S
     excess_eq = max(zero(FT), linear_mu)
     α = min(FT(1), q_c / sqrt(excess_eq * excess_eq + q_min * q_min))
 

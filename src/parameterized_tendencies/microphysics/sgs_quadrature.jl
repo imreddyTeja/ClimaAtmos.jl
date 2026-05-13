@@ -471,7 +471,7 @@ for the given distribution type, avoiding redundant `sqrt`, `log`, and `div`
 operations inside the `N²` quadrature loop.
 """
 @inline function create_physical_transform(
-    ::GaussianSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+    ::GaussianSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT,
 ) where {FT}
     σ_c = sqrt(max(one(FT) - corr^2, zero(FT))) * σ_T
     fac = corr * σ_T / max(σ_q, ϵ_numerics(FT))
@@ -479,7 +479,7 @@ operations inside the `N²` quadrature loop.
 end
 
 @inline function create_physical_transform(
-    ::LogNormalSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+    ::LogNormalSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT,
 ) where {FT}
     ε = ϵ_numerics(FT)
     c1 = corr
@@ -491,12 +491,12 @@ end
     use_lognormal = (μ_q > ε) & (σ_q > zero(FT))
 
     return LogNormalPhysicalPointTransform(
-        μ_T, μ_q, σ_T, μ_ln, σ_ln, c1, c2, use_lognormal, T_min, q_max
+        μ_T, μ_q, σ_T, μ_ln, σ_ln, c1, c2, use_lognormal, T_min, q_max,
     )
 end
 
 @inline function create_physical_transform(
-    ::GridMeanSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+    ::GridMeanSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT,
 ) where {FT}
     return GridMeanPhysicalPointTransform(μ_T, μ_q)
 end
