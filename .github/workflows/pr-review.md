@@ -58,7 +58,6 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 - Set `event` on `submit-pull-request-review` explicitly:
   - `REQUEST_CHANGES` when there are issues that must be fixed before merge.
   - `COMMENT` when there are only non-blocking observations, open questions, or testing gaps.
-  - `APPROVE` when there are no findings that require changes.
 - If you cannot retrieve the pull request diff, cannot map findings to changed lines, or determine there is no new action to take, call `noop` with a short explanation instead of guessing.
 
 ## Cache Updates
