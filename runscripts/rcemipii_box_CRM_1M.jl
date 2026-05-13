@@ -145,10 +145,9 @@ simulation = CA.AtmosSimulation{FT}(; job_id,
     # Callbacks
     callback_kwargs = (; dt_rad = "1hours"),
     # Diagnostics
-    default_diagnostics = false,
-    diagnostics,
+    diagnostics = CA.DiagnosticsConfig(; default = false, additional = diagnostics),
     # Numerics
-    approximate_linear_solve_iters = 2,  # TODO: Fix implicit diffusion for LES
+    jacobian = CA.ManualSparseJacobian(; approximate_solve_iters = 2),  # TODO: Fix implicit diffusion for LES
     # Misc
     checkpoint_frequency = "1days",
     log_to_file = true,

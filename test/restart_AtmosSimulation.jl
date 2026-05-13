@@ -38,7 +38,7 @@ function amip_target_diagedmf(context, output_dir)
     diff_mode = CA.Implicit()
     hyperdiff = CA.cam_se_hyperdiffusion(FT)
 
-    tracers = (
+    aerosol_names = (
         "CB1", "CB2",
         "DST01", "DST02", "DST03", "DST04", "DST05",
         "OC1", "OC2",
@@ -103,8 +103,7 @@ function amip_target_diagedmf(context, output_dir)
 
     grid = CA.SphereGrid(FT; topography, h_elem, z_elem, z_max, dz_bottom, context)
 
-    # TODO: Use jacobian flags
-    approximate_linear_solve_iters = 2
+    jacobian = CA.ManualSparseJacobian(; approximate_solve_iters = 2)
     max_newton_iters_ode = 1
 
     newtons_method = CTS.NewtonsMethod(;
@@ -123,11 +122,11 @@ function amip_target_diagedmf(context, output_dir)
 
     args = (; model,
         grid,
-        tracers,
+        aerosol_names,
         dt = 1secs,
         t_end = 3secs,
         checkpoint_frequency = 1secs,
-        approximate_linear_solve_iters,
+        jacobian,
         callback_kwargs,
         ode_config,
         surface_setup,
@@ -393,7 +392,7 @@ if MANYTESTS
                         grid,
                         job_id,
                         callback_kwargs,
-                        default_diagnostics = false,
+                        diagnostics = CA.DiagnosticsConfig(; default = false),
                         dt = 1secs,
                         t_end = 3secs,
                         checkpoint_frequency = 1secs,
