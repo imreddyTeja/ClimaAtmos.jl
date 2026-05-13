@@ -23,6 +23,7 @@ safe-outputs:
     side: RIGHT
   submit-pull-request-review:
     max: 2
+    allowed-events: [COMMENT]
 ---
 
 # Pull Request Review
