@@ -10,7 +10,7 @@ Please refer to the shared CliMA agent index for ecosystem-wide rules regarding 
 
 Always read the ClimaAtmos-specific guide before working in this repository:
 
-- [docs/agents/clima_atmos_specific.md](docs/agents/clima_atmos_specific.md) — directory tree, test groups, and reproducibility specifics for *this* repo.
+- [docs/clima_atmos_specific.md](docs/clima_atmos_specific.md) — directory tree, test groups, and reproducibility specifics for *this* repo.
 
 ## Local norms
 
@@ -24,5 +24,5 @@ Always read the ClimaAtmos-specific guide before working in this repository:
 
 ## Self-correction
 
-- If the code map in [docs/agents/clima_atmos_specific.md](docs/agents/clima_atmos_specific.md) is discovered to be stale, update it.
-- If the user gives a correction about how work should be done in this repo, add it to `Local norms` or another clearly labeled persistent section in this file or in the linked files in `docs/agents/` so future sessions inherit it.
+- If the code map in [docs/clima_atmos_specific.md](docs/clima_atmos_specific.md) is discovered to be stale, update it.
+- If the user gives a correction about how work should be done in this repo, add it to `Local norms` or another clearly labeled persistent section in this file or in [docs/clima_atmos_specific.md](docs/clima_atmos_specific.md) so future sessions inherit it.
