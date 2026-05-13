@@ -55,10 +55,10 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 ## Safe Outputs
 
 - Use `create-pull-request-review-comment` for inline comments on specific changed lines.
-- Use `submit-pull-request-review` exactly once for the overall review. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
-- Set `event` on `submit-pull-request-review` explicitly:
-  - `REQUEST_CHANGES` when there are issues that must be fixed before merge.
-  - `COMMENT` when there are only non-blocking observations, open questions, or testing gaps.
+- Use `submit-pull-request-review` exactly once for the overall review comment. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
+- Do not use `noop` for progress updates, completion signals, tool tests, or cache-write status messages. If you submit a review, stop and do not emit any further safe outputs.
+- Do not probe `safeoutputs` with `--help`, dry runs, placeholder submissions, or empty `submit-pull-request-review` calls. The first review submission must be the final one.
+- Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow; leave only a comment review summarizing findings, risks, questions, or the absence of issues.
 - If you cannot retrieve the pull request diff, cannot map findings to changed lines, or determine there is no new action to take, call `noop` with a short explanation instead of guessing.
 
 ## Cache Updates
@@ -68,3 +68,4 @@ After submitting the review, update cache memory:
 - Write `/tmp/gh-aw/cache-memory/pr-${{ github.event.issue.number }}.json` with a concise summary of the completed review, including timestamp, review event, number of findings, major themes, and files reviewed.
 - Update `/tmp/gh-aw/cache-memory/reviews.json` with the latest pull request review summary in a simple machine-readable format.
 - Use filesystem-safe timestamps without colons.
+- Treat cache updates as best-effort bookkeeping. If a cache write is blocked or fails, do not emit `noop`, `missing_tool`, or another review to report that failure.
