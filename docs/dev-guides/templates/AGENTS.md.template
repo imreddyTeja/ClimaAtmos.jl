@@ -1,0 +1,18 @@
+# AGENTS.md
+
+<!-- Copy this file to your repo root as AGENTS.md and fill in the placeholders. -->
+
+Read these documents in the order listed when starting work on this repository.
+
+## Shared guides (via DeveloperGuides submodule)
+
+The full index of shared engineering guidelines is at [docs/dev-guides/AGENTS.md](docs/dev-guides/AGENTS.md). Start there for:
+- Architecture, design patterns, and cross-repo contracts
+- GPU performance, type stability, and AD compatibility
+- Code style, testing, and PR review
+
+## Repo-specific guide
+
+<!-- Replace the path below with your repo-specific guide location. -->
+
+- [docs/agents/REPO_NAME_specific.md](docs/agents/REPO_NAME_specific.md) — directory layout, key abstractions, test groups, and conventions specific to this package.
