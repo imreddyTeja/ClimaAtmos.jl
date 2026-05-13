@@ -10,10 +10,11 @@ strict: true
 network:
   allowed: [defaults, chrome, github, node, local, threat-detection, "172.30.0.30"]
 tools:
-  bash: [mcpscripts, safeoutputs]
+  bash: [":*"]
   cache-memory: true
   github:
     toolsets: [default, pull_requests]
+  web-fetch:
 safe-outputs:
   threat-detection: false
   noop:
@@ -21,7 +22,7 @@ safe-outputs:
     max: 5
     side: RIGHT
   submit-pull-request-review:
-    max: 1
+    max: 2
 ---
 
 # Pull Request Review
@@ -53,7 +54,7 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 ## Safe Outputs
 
 - Use `create-pull-request-review-comment` for inline comments on specific changed lines.
-- Use `submit-pull-request-review` exactly once for the overall review.
+- Use `submit-pull-request-review` exactly once for the overall review. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
 - Set `event` on `submit-pull-request-review` explicitly:
   - `REQUEST_CHANGES` when there are issues that must be fixed before merge.
   - `COMMENT` when there are only non-blocking observations, open questions, or testing gaps.
