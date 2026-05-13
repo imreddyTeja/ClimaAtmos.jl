@@ -1,3 +1,0 @@
-[submodule "docs/dev-guides"]
-	path = docs/dev-guides
-	url = https://github.com/CliMA/DeveloperGuides.git
