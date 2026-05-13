@@ -193,7 +193,7 @@ Subgrid-scale quadrature configuration for integrating over thermodynamic fluctu
 
 # Constructors
 
-    SGSQuadrature(FT; quadrature_order=3, distribution=GaussianSGS(), T_min=150.0, q_max=0.1)
+    SGSQuadrature(FT; quadrature_order=3, distribution=GaussianSGS(), T_min=150.0, q_max=0.05)
 
 Create an `SGSQuadrature` with the specified floating-point type `FT`,
 quadrature order, distribution type, minimum temperature, and maximum humidity.
@@ -214,8 +214,8 @@ struct SGSQuadrature{N, A, W, D <: AbstractSGSDistribution, FT} <: AbstractSGSam
         ::Type{FT};
         quadrature_order = 3,
         distribution::D = GaussianSGS(),
-        T_min = FT(150),  # Reasonable default for atmospheric applications
-        q_max = FT(0.1),  # Maximum humidity: ~100 g/kg (well above physical max)
+        T_min = FT(150),   # Reasonable default for atmospheric applications
+        q_max = FT(0.05),  # Maximum humidity: 50 g/kg (above any physical value)
     ) where {FT, D <: AbstractSGSDistribution}
         # GridMeanSGS always uses N=1 (single point at origin)
         N = distribution isa GridMeanSGS ? 1 : quadrature_order
@@ -530,21 +530,29 @@ function sum_over_quadrature_points(f, get_x_hat, quad::SGSQuadrature{N}) where 
 
     inv_sqrt_pi = one(FT) / sqrt(FT(π))
 
-    # Use loops instead of ntuple for register reuse across iterations
-    # Each loop iteration can release registers from the previous iteration,
-    # dramatically reducing peak register usage (from holding all N² evaluations to just a few)
-    zero_val = rzero(f(get_x_hat(χ[1], χ[1])...))
-    outer_sum = zero_val
-
-    @inbounds for i in 1:N
-        inner_sum = zero_val
-        @inbounds for j in 1:N
-            x_hat = get_x_hat(χ[i], χ[j])
-            contribution = f(x_hat...) ⊠ (weights[j] * inv_sqrt_pi)
-            inner_sum = inner_sum ⊞ contribution
+    # Use loops (not ntuple) for register reuse across iterations: each loop
+    # iteration releases registers from the previous one, dramatically reducing
+    # peak register usage. Seed both accumulators from real (i, j) = (1, 1)
+    # evaluations rather than a separate `rzero(f(...))` dummy call — that
+    # saves one full evaluation of `f` per cell (≈ 11% of work at N = 3).
+    @inbounds begin
+        x_hat = get_x_hat(χ[1], χ[1])
+        inner_sum = f(x_hat...) ⊠ (weights[1] * inv_sqrt_pi)
+        for j in 2:N
+            x_hat = get_x_hat(χ[1], χ[j])
+            inner_sum = inner_sum ⊞ (f(x_hat...) ⊠ (weights[j] * inv_sqrt_pi))
         end
-        weighted_inner = inner_sum ⊠ (weights[i] * inv_sqrt_pi)
-        outer_sum = outer_sum ⊞ weighted_inner
+        outer_sum = inner_sum ⊠ (weights[1] * inv_sqrt_pi)
+
+        for i in 2:N
+            x_hat = get_x_hat(χ[i], χ[1])
+            inner_sum = f(x_hat...) ⊠ (weights[1] * inv_sqrt_pi)
+            for j in 2:N
+                x_hat = get_x_hat(χ[i], χ[j])
+                inner_sum = inner_sum ⊞ (f(x_hat...) ⊠ (weights[j] * inv_sqrt_pi))
+            end
+            outer_sum = outer_sum ⊞ (inner_sum ⊠ (weights[i] * inv_sqrt_pi))
+        end
     end
 
     return outer_sum
