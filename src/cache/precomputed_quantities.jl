@@ -159,21 +159,26 @@ function precomputed_quantities(Y, atmos)
         atmos.microphysics_model isa
         Union{NonEquilibriumMicrophysics1M, NonEquilibriumMicrophysics2M} ||
         atmos.cloud_model isa Union{QuadratureCloud, MLCloud}
-    SGSMomentsNT = @NamedTuple{
-        mu_S::FT, sigma_S_sq::FT, M_l::FT, M_i::FT,
-    }
-    # `ᶜsgs_moments` is written by `set_sgs_moments!` at the start of every
-    # Picard iteration (inside `set_covariance_cache_and_cloud_fraction!`) and
-    # is read only after that, so leaving it uninitialized here matches the
-    # pattern used for the other NamedTuple-valued caches (e.g.,
-    # `ᶜmp_tendency`). 
-    covariance_quantities =
-        uses_sgs_quadrature ?
-        (;
+    # `ᶜsgs_moments_mp` caches the SGS-mean equilibrium cloud condensate
+    # `(M_l, M_i)` used by the `Microphysics1MEvaluator` shape-function
+    # partition. It is allocated only for schemes that consume it. The
+    # `(μ_S, σ_S²)` moments needed by `compute_cloud_fraction_hybrid` are
+    # computed inline in the cloud-fraction broadcast and never stored.
+    uses_microphysics_quadrature_moments =
+        atmos.microphysics_model isa
+        Union{NonEquilibriumMicrophysics1M, NonEquilibriumMicrophysics2M}
+    SGSMomentsMPNT = @NamedTuple{M_l::FT, M_i::FT}
+    covariance_quantities = if uses_sgs_quadrature
+        base = (;
             ᶜT′T′ = zeros(axes(Y.c)),
             ᶜq′q′ = zeros(axes(Y.c)),
-            ᶜsgs_moments = similar(Y.c, SGSMomentsNT),
-        ) : (;)
+        )
+        uses_microphysics_quadrature_moments ?
+        (; base..., ᶜsgs_moments_mp = similar(Y.c, SGSMomentsMPNT)) :
+        base
+    else
+        (;)
+    end
     surface_precip_fluxes = (;
         surface_rain_flux = zeros(axes(Fields.level(Y.f, half))),
         surface_snow_flux = zeros(axes(Fields.level(Y.f, half))),
