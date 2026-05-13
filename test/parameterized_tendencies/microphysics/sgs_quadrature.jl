@@ -219,28 +219,26 @@ using ClimaAtmos
                 q_max = FT(1.0)
 
                 # GaussianSGS at χ = 0 should return means
-                T_hat, q_hat = ClimaAtmos.get_physical_point(
-                    ClimaAtmos.GaussianSGS(), FT(0), FT(0), μ_q, μ_T, σ_q, σ_T, corr,
-                    T_min, q_max,
+                gauss_t = ClimaAtmos.create_physical_transform(
+                    ClimaAtmos.GaussianSGS(), μ_q, μ_T, σ_q, σ_T, corr, T_min, q_max,
                 )
+                T_hat, q_hat = gauss_t(FT(0), FT(0))
                 @test T_hat ≈ μ_T atol = FT(0.1)
                 @test q_hat ≈ μ_q atol = FT(0.001)
 
                 # LogNormalSGS
-                T_hat_ln, q_hat_ln = ClimaAtmos.get_physical_point(
-                    ClimaAtmos.LogNormalSGS(), FT(0), FT(0), μ_q, μ_T, σ_q, σ_T, corr,
-                    T_min, q_max,
+                ln_t = ClimaAtmos.create_physical_transform(
+                    ClimaAtmos.LogNormalSGS(), μ_q, μ_T, σ_q, σ_T, corr, T_min, q_max,
                 )
+                T_hat_ln, q_hat_ln = ln_t(FT(0), FT(0))
                 @test T_hat_ln ≈ μ_T atol = FT(0.1)
                 @test q_hat_ln > 0  # log-normal is always positive
 
-
-
                 # GridMeanSGS always returns grid mean regardless of χ values
-                T_hat_gm, q_hat_gm = ClimaAtmos.get_physical_point(
-                    ClimaAtmos.GridMeanSGS(), FT(999), FT(999), μ_q, μ_T, σ_q, σ_T,
-                    corr, T_min, q_max,
+                gm_t = ClimaAtmos.create_physical_transform(
+                    ClimaAtmos.GridMeanSGS(), μ_q, μ_T, σ_q, σ_T, corr, T_min, q_max,
                 )
+                T_hat_gm, q_hat_gm = gm_t(FT(999), FT(999))
                 @test T_hat_gm == μ_T  # Exact equality, not approximate
                 @test q_hat_gm == μ_q  # Exact equality, not approximate
             end

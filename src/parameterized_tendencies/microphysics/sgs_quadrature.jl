@@ -401,178 +401,104 @@ Tuple `(σ_q, σ_T, corr)` of standard deviations and clamped correlation.
 end
 
 # ============================================================================
-# Physical Point Computation
+# Physical Point Transform Functors
 # ============================================================================
 
-"""
-    get_physical_point(dist, χ1, χ2, μ_q, μ_T, σ_q, σ_T, corr, T_min, q_max)
+abstract type AbstractPhysicalPointTransform end
 
-Transform quadrature points ``(\\chi_1, \\chi_2)`` to physical space ``(T, q)``.
-
-Temperature is always Gaussian, clamped to ``T \\geq T_{min}``.
-Specific humidity is clamped to ``0 \\leq q \\leq q_{max}``.
-Sampling depends on `dist`:
-
-**`GaussianSGS`**: correlated bivariate Gaussian
-```math
-q = \\clamp(\\mu_q + \\sqrt{2} \\sigma_q \\chi_1, \\; 0, \\; q_{max})
-```
-```math
-T = \\max(T_{min}, \\; \\mu_T + \\sqrt{2} \\sigma_T (\\rho \\chi_1 + \\sqrt{1-\\rho^2} \\chi_2))
-```
-
-**`LogNormalSGS`**: log-normal for `q`, Gaussian for `T`, linked by a Gaussian copula
-```math
-q = \\min(q_{max}, \\; \\exp(\\mu_{\\ln} + \\sqrt{2} \\sigma_{\\ln} z_q))
-```
-where ``z_q = \\chi_1`` and ``z_T = \\rho \\chi_1 + \\sqrt{1-\\rho^2} \\chi_2``.
-
-# Arguments
-- `dist`: Distribution type (`GaussianSGS`, `LogNormalSGS`, or `GridMeanSGS`)
-- `χ1`, `χ2`: Quadrature abscissae
-- `μ_q`, `μ_T`: Mean specific humidity [kg/kg] and temperature [K]
-- `σ_q`, `σ_T`: Standard deviations of `q` and `T`
-- `corr`: Correlation coefficient ``\\rho(T', q')``
-- `T_min`: Minimum temperature floor [K]
-- `q_max`: Maximum specific humidity ceiling [kg/kg]
-
-# Returns
-Tuple `(T_hat, q_hat)` of physical values.
-"""
-@inline function get_physical_point(
-    ::GaussianSGS,
-    χ1,
-    χ2,
-    μ_q,
-    μ_T,
-    σ_q,
-    σ_T,
-    corr,
-    T_min,
-    q_max,
-)
-    FT = typeof(μ_q)
-    sqrt2 = sqrt(FT(2))
-
-    # Clamp q to physically valid ranges
-    q_hat = clamp(μ_q + sqrt2 * σ_q * χ1, zero(FT), q_max)
-
-    # Re-infer effective χ1 from clamped q to maintain physical T-q correlation.
-    # If a negative q fluctuation was truncated to 0, T should only be conditioned
-    # on the q=0 state, not the "phantom" negative q.
-    χ1_eff = (q_hat - μ_q) / (sqrt2 * max(σ_q, ϵ_numerics(FT)))
-
-    # Conditional mean and std for T given *clamped* q
-    σ_c = sqrt(max(one(FT) - corr^2, zero(FT))) * σ_T
-    μ_c = μ_T + sqrt2 * corr * σ_T * χ1_eff
-
-    # Clamp T to physically valid ranges
-    T_hat = max(T_min, μ_c + sqrt2 * σ_c * χ2)
-
-    return (T_hat, q_hat)
-end
-
-@inline function get_physical_point(
-    ::LogNormalSGS,
-    χ1,
-    χ2,
-    μ_q,
-    μ_T,
-    σ_q,
-    σ_T,
-    corr,
-    T_min,
-    q_max,
-)
-    FT = typeof(μ_q)
-    sqrt2 = sqrt(FT(2))
-    ε = ϵ_numerics(FT)
-
-    # Step 1: Generate correlated Gaussian variables using copula approach
-    z_q = χ1
-    z_T = corr * χ1 + sqrt(max(zero(FT), one(FT) - corr^2)) * χ2
-
-    # Step 2: Transform z_q to log-normal for q
-    # For log-normal: σ_ln = √log(1 + σ²/μ²), μ_ln = log(μ) - σ_ln²/2
-    ratio = σ_q / max(μ_q, ε)
-    σ_ln = sqrt(log(one(FT) + ratio^2))
-    μ_ln = log(max(μ_q, ε)) - σ_ln^2 / 2
-    q_lognormal = exp(μ_ln + sqrt2 * σ_ln * z_q)
-
-    # Use log-normal only if both mean and variance are positive
-    use_lognormal = (μ_q > ε) & (σ_q > zero(FT))
-    q_hat = clamp(ifelse(use_lognormal, q_lognormal, μ_q), zero(FT), q_max)
-
-    # Step 3: Keep Gaussian for T using correlated z_T, clamped to T_min
-    T_hat = max(T_min, μ_T + sqrt2 * σ_T * z_T)
-
-    return (T_hat, q_hat)
-end
-
-# GridMeanSGS: evaluates only at the grid mean, ignoring variance
-@inline function get_physical_point(
-    ::GridMeanSGS,
-    χ1,
-    χ2,
-    μ_q,
-    μ_T,
-    σ_q,
-    σ_T,
-    corr,
-    T_min,
-    q_max,
-)
-    # Return grid mean directly, ignoring quadrature points, variance, and bounds
-    # χ1, χ2, σ_q, σ_T, corr, T_min, q_max are all ignored
-    (μ_T, μ_q)
-end
-
-# ============================================================================
-# Physical Point Transform Functor
-# ============================================================================
-
-"""
-    PhysicalPointTransform
-
-GPU-safe functor wrapping `get_physical_point` to avoid heap-allocated closures.
-
-Captures all parameters needed by `get_physical_point(dist, χ1, χ2, ...)` in a
-struct. Field order matches return order `(T, q)` for consistency.
-
-# Fields
-- `dist`: Distribution type (`GaussianSGS`, `LogNormalSGS`, or `GridMeanSGS`)
-- `μ_T`: Mean temperature [K]
-- `μ_q`: Mean specific humidity [kg/kg]
-- `σ_T`: Standard deviation of T [K]
-- `σ_q`: Standard deviation of q [kg/kg]
-- `corr`: Correlation coefficient [-1, 1]
-- `T_min`: Minimum temperature floor [K]
-- `q_max`: Maximum specific humidity ceiling [kg/kg]
-"""
-struct PhysicalPointTransform{D, FT}
-    dist::D
+struct GaussianPhysicalPointTransform{FT} <: AbstractPhysicalPointTransform
     μ_T::FT
     μ_q::FT
-    σ_T::FT
     σ_q::FT
-    corr::FT
+    σ_c::FT      # precomputed conditional std of T: σ_T * sqrt(1 - corr^2)
+    fac::FT      # precomputed factor: corr * σ_T / max(σ_q, ϵ)
     T_min::FT
     q_max::FT
 end
 
-@inline function (t::PhysicalPointTransform)(χ1, χ2)
-    return get_physical_point(
-        t.dist,
-        χ1,
-        χ2,
-        t.μ_q,
-        t.μ_T,
-        t.σ_q,
-        t.σ_T,
-        t.corr,
-        t.T_min,
-        t.q_max,
+@inline function (t::GaussianPhysicalPointTransform)(χ1, χ2)
+    FT = typeof(t.μ_q)
+    sqrt2 = sqrt(FT(2))
+
+    q_hat = clamp(t.μ_q + sqrt2 * t.σ_q * χ1, zero(FT), t.q_max)
+    μ_c = t.μ_T + t.fac * (q_hat - t.μ_q)
+    T_hat = max(t.T_min, μ_c + sqrt2 * t.σ_c * χ2)
+
+    return (T_hat, q_hat)
+end
+
+struct LogNormalPhysicalPointTransform{FT} <: AbstractPhysicalPointTransform
+    μ_T::FT
+    μ_q::FT
+    σ_T::FT
+    μ_ln::FT
+    σ_ln::FT
+    c1::FT       # corr
+    c2::FT       # sqrt(1 - corr^2)
+    use_lognormal::Bool
+    T_min::FT
+    q_max::FT
+end
+
+@inline function (t::LogNormalPhysicalPointTransform)(χ1, χ2)
+    FT = typeof(t.μ_q)
+    sqrt2 = sqrt(FT(2))
+
+    z_q = χ1
+    z_T = t.c1 * χ1 + t.c2 * χ2
+
+    q_lognormal = exp(t.μ_ln + sqrt2 * t.σ_ln * z_q)
+    q_hat = clamp(ifelse(t.use_lognormal, q_lognormal, t.μ_q), zero(FT), t.q_max)
+    T_hat = max(t.T_min, t.μ_T + sqrt2 * t.σ_T * z_T)
+
+    return (T_hat, q_hat)
+end
+
+struct GridMeanPhysicalPointTransform{FT} <: AbstractPhysicalPointTransform
+    μ_T::FT
+    μ_q::FT
+end
+
+@inline function (t::GridMeanPhysicalPointTransform)(χ1, χ2)
+    return (t.μ_T, t.μ_q)
+end
+
+"""
+    create_physical_transform(dist, μ_q, μ_T, σ_q, σ_T, corr, T_min, q_max)
+
+Create a `PhysicalPointTransform` functor that precomputes loop-invariant constants
+for the given distribution type, avoiding redundant `sqrt`, `log`, and `div`
+operations inside the `N²` quadrature loop.
+"""
+@inline function create_physical_transform(
+    ::GaussianSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+) where {FT}
+    σ_c = sqrt(max(one(FT) - corr^2, zero(FT))) * σ_T
+    fac = corr * σ_T / max(σ_q, ϵ_numerics(FT))
+    return GaussianPhysicalPointTransform(μ_T, μ_q, σ_q, σ_c, fac, T_min, q_max)
+end
+
+@inline function create_physical_transform(
+    ::LogNormalSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+) where {FT}
+    ε = ϵ_numerics(FT)
+    c1 = corr
+    c2 = sqrt(max(zero(FT), one(FT) - corr^2))
+
+    ratio = σ_q / max(μ_q, ε)
+    σ_ln = sqrt(log(one(FT) + ratio^2))
+    μ_ln = log(max(μ_q, ε)) - σ_ln^2 / 2
+    use_lognormal = (μ_q > ε) & (σ_q > zero(FT))
+
+    return LogNormalPhysicalPointTransform(
+        μ_T, μ_q, σ_T, μ_ln, σ_ln, c1, c2, use_lognormal, T_min, q_max
     )
+end
+
+@inline function create_physical_transform(
+    ::GridMeanSGS, μ_q::FT, μ_T::FT, σ_q::FT, σ_T::FT, corr::FT, T_min::FT, q_max::FT
+) where {FT}
+    return GridMeanPhysicalPointTransform(μ_T, μ_q)
 end
 
 # ============================================================================
@@ -607,10 +533,11 @@ function sum_over_quadrature_points(f, get_x_hat, quad::SGSQuadrature{N}) where 
     # Use loops instead of ntuple for register reuse across iterations
     # Each loop iteration can release registers from the previous iteration,
     # dramatically reducing peak register usage (from holding all N² evaluations to just a few)
-    outer_sum = rzero(f(get_x_hat(χ[1], χ[1])...))
+    zero_val = rzero(f(get_x_hat(χ[1], χ[1])...))
+    outer_sum = zero_val
 
     @inbounds for i in 1:N
-        inner_sum = rzero(f(get_x_hat(χ[1], χ[1])...))
+        inner_sum = zero_val
         @inbounds for j in 1:N
             x_hat = get_x_hat(χ[i], χ[j])
             contribution = f(x_hat...) ⊠ (weights[j] * inv_sqrt_pi)
@@ -652,12 +579,12 @@ function integrate_over_sgs(f, quad, μ_q, μ_T, q′q′, T′T′, corr_Tq)
     # Promote μ_T and μ_q to the widest type: with autodiff, either may
     # independently be a Dual (when ρe_tot or ρq_tot is perturbed).
     μ_T_p, μ_q_p = promote(μ_T, μ_q)
-    transform = PhysicalPointTransform(
+    transform = create_physical_transform(
         quad.dist,
-        μ_T_p,
         μ_q_p,
-        oftype(μ_T_p, σ_T),
+        μ_T_p,
         oftype(μ_T_p, σ_q),
+        oftype(μ_T_p, σ_T),
         oftype(μ_T_p, corr),
         oftype(μ_T_p, quad.T_min),
         oftype(μ_T_p, quad.q_max),
