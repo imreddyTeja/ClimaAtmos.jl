@@ -639,16 +639,14 @@ using ClimaAtmos
                 denom_l = M_sq + M_l * M_l
                 denom_i = M_sq + M_i * M_i
                 γ_l = M_l / denom_l
-                β_l = M_sq / denom_l
                 γ_i = M_i / denom_i
-                β_i = M_sq / denom_i
 
                 # Create evaluator with precomputed shape-function coefficients
                 evaluator = Microphysics1MEvaluator(
                     BMT.Microphysics1Moment(),
                     mp, thp, ρ,
                     q_lcl_mean, q_icl_mean, q_rai, q_sno,
-                    λ, γ_l, β_l, γ_i, β_i,
+                    λ, γ_l, M_l, γ_i, M_i,
                     dt, nsubs_quad,
                     (),
                 )

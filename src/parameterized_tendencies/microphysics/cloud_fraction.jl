@@ -425,10 +425,8 @@ the saturation variable are taken from the pre-pass quadrature
 activation factor are evaluated here.
 
 # Algorithm
-1. Activation factor on linear grid-mean excess:
-   `α = clamp(q_c / √((q_t − q_sat)_+² + q_min²), 0, 1)` with
-   `q_sat = q_vap_saturation(T, ρ)`. As `q_c → 0` in a clear subdomain,
-   `α → 0` and the cloud fraction goes smoothly to zero.
+1. Activation factor on linear excess from cached moments:
+   `α = clamp(q_c / √((μ_S)_+² + q_min²), 0, 1)`.
 2. Activation-scaled SGS standard deviation: `σ_qc = α √(σ_S²)`.
 3. Effective excess `Q_eff` from cached `μ_S`, dispatched on `sgs_dist`:
    - Gaussian/GridMean: `Q_eff = q_c + min(0, μ_S)` (linear coordinates).
@@ -437,7 +435,8 @@ activation factor are evaluated here.
    (`erf(x/√2) ≈ tanh((π/(2√3)) x)`):
    `f_c = ½ [1 + tanh(c_f · Q_eff / σ_qc)]` with
    `c_f = (π/(2√3)) · cf_steepness_scale`.
-5. Branchless gate: `f_c = 0` when no prognostic condensate is present.
+5. Activation scaling: `f_c = f_c · α`. This smoothly drives the cloud
+   fraction to zero as the prognostic condensate vanishes.
 
 # Arguments
 - `thermo_params`: Thermodynamics parameters.
@@ -469,9 +468,8 @@ Cloud fraction ∈ [0, 1].
 
     q_c = q_liq + q_ice
 
-    # --- 1. Activation factor: linear excess at grid mean
-    q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
-    excess_eq = max(zero(FT), q_tot - q_sat)
+    # --- 1. Activation factor: linear excess from cached quadrature moments
+    excess_eq = max(zero(FT), moments.mu_S)
     α = min(FT(1), q_c / sqrt(excess_eq * excess_eq + q_min * q_min))
 
     # --- 2. Activation-scaled SGS standard deviation
@@ -479,6 +477,7 @@ Cloud fraction ∈ [0, 1].
     σ_qc = α * σ_S
 
     # --- 3. Effective excess Q_eff in the coordinate of the SGS distribution
+    q_sat = TD.q_vap_saturation(thermo_params, T, ρ)
     Q_eff =
         _effective_excess_hybrid(q_c, q_sat, moments.mu_S, q_min, sgs_dist)
 
@@ -487,9 +486,8 @@ Cloud fraction ∈ [0, 1].
     σ_safe = max(σ_qc, ϵ_numerics(FT))
     cf = FT(0.5) * (FT(1) + tanh(coeff * Q_eff / σ_safe))
 
-    # --- 5. Branchless gate: no prognostic condensate → no cloud
-    has_cond = TD.has_condensate(thermo_params, q_c)
-    return ifelse(has_cond, cf, zero(FT))
+    # --- 5. Activation scaling: smoothly damp cf to 0 as prognostic condensate vanishes
+    return cf * α
 end
 
 """
