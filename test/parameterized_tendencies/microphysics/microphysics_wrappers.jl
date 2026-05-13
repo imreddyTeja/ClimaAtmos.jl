@@ -246,9 +246,9 @@ import ClimaAtmos: limit_sink
                     denom_i = M_sq + M_i * M_i
                     return (
                         γ_l = M_l / denom_l,
-                        β_l = M_sq / denom_l,
+                        M_l = M_l,
                         γ_i = M_i / denom_i,
-                        β_i = M_sq / denom_i,
+                        M_i = M_i,
                     )
                 end
 
@@ -261,7 +261,7 @@ import ClimaAtmos: limit_sink
                         BMT.Microphysics1Moment(),
                         mp, thp, ρ,
                         FT(0), FT(0), FT(0), FT(0),  # q_lcl_mean, q_icl_mean, q_rai, q_sno
-                        FT(1), sc.γ_l, sc.β_l, sc.γ_i, sc.β_i, # λ, γ_l, β_l, γ_i, β_i
+                        FT(1), sc.γ_l, sc.M_l, sc.γ_i, sc.M_i, # λ, γ_l, M_l, γ_i, M_i
                         FT(60), nsubs_quad, (),
                     )
 
@@ -290,7 +290,7 @@ import ClimaAtmos: limit_sink
                         BMT.Microphysics1Moment(),
                         mp, thp, ρ,
                         q_lcl, FT(0), FT(0), FT(0),  # q_lcl_mean, q_icl_mean, q_rai, q_sno
-                        FT(1), sc.γ_l, sc.β_l, sc.γ_i, sc.β_i, # λ, γ_l, β_l, γ_i, β_i
+                        FT(1), sc.γ_l, sc.M_l, sc.γ_i, sc.M_i, # λ, γ_l, M_l, γ_i, M_i
                         FT(60), nsubs_quad, (),
                     )
 
@@ -306,15 +306,15 @@ import ClimaAtmos: limit_sink
 
                 @testset "Stale-cloud edge case (M_l → 0) → β fallback" begin
                     # q_lcl_mean > 0 but M_l ≈ 0 (no equilibrium condensate
-                    # anywhere in the SGS PDF). β ≈ 1, so q_lcl_hat ≈ q_lcl_mean
+                    # anywhere in the SGS PDF). γ ≈ 0, so q_lcl_hat ≈ q_lcl_mean
                     # — recovering the uniform-condensate fallback.
                     q_lcl_stale = FT(1e-4)
-                    sc = _shape_coeffs(FT(0), FT(0), q_min) # M_l = 0 ⇒ β = 1
+                    sc = _shape_coeffs(FT(0), FT(0), q_min) # M_l = 0 ⇒ γ = 0
                     eval_stale = Microphysics1MEvaluator(
                         BMT.Microphysics1Moment(),
                         mp, thp, ρ,
                         q_lcl_stale, FT(0), FT(0), FT(0),
-                        FT(1), sc.γ_l, sc.β_l, sc.γ_i, sc.β_i,
+                        FT(1), sc.γ_l, sc.M_l, sc.γ_i, sc.M_i,
                         FT(60), nsubs_quad, (),
                     )
                     # Subsaturated quadrature point: q_lcl_eq_hat = 0.
