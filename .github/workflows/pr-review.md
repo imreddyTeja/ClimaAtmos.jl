@@ -10,7 +10,7 @@ strict: true
 network:
   allowed: [defaults, chrome, github, node, local, threat-detection, "172.30.0.30"]
 tools:
-  bash: [":*"]
+  bash: [":*", "safeoutputs"]
   cache-memory: true
   github:
     toolsets: [default, pull_requests]
@@ -19,10 +19,10 @@ safe-outputs:
   threat-detection: false
   noop:
   create-pull-request-review-comment:
-    max: 5
+    max: 6
     side: RIGHT
   submit-pull-request-review:
-    max: 2
+    max: 5
     allowed-events: [COMMENT]
 ---
 
@@ -55,9 +55,7 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 ## Safe Outputs
 
 - Use `create-pull-request-review-comment` for inline comments on specific changed lines.
-- Use `submit-pull-request-review` exactly once for the overall review comment. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
-- Do not use `noop` for progress updates, completion signals, tool tests, or cache-write status messages. If you submit a review, stop and do not emit any further safe outputs.
-- Do not probe `safeoutputs` with `--help`, dry runs, placeholder submissions, or empty `submit-pull-request-review` calls. The first review submission must be the final one.
+- Use `submit-pull-request-review` for the overall review comment. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
 - Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow; leave only a comment review summarizing findings, risks, questions, or the absence of issues.
 - If you cannot retrieve the pull request diff, cannot map findings to changed lines, or determine there is no new action to take, call `noop` with a short explanation instead of guessing.
 
