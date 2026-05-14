@@ -19,10 +19,10 @@ safe-outputs:
   threat-detection: false
   noop:
   create-pull-request-review-comment:
-    max: 6
+    max: 10
     side: RIGHT
   submit-pull-request-review:
-    max: 5
+    max: 1
     allowed-events: [COMMENT]
 ---
 
@@ -51,13 +51,17 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 3. Read any prior cached review summary for this pull request and avoid repeating the same findings unless the new diff materially changes them.
 4. Use GitHub pull request tools to fetch the pull request metadata and changed files for PR #${{ github.event.issue.number }}.
 5. Review the pull request using the workflow and checklist in `docs/dev-guides/workflow/review.md`, applying the repository-specific context from `docs/clima_atmos_specific.md`.
+6. Prefer `create-pull-request-review-comment` for every actionable finding that can be mapped to a changed line. Make comments specific, local, and evidence-based; one finding per comment unless closely related low-severity items fit naturally together.
+7. Use `submit-pull-request-review` only once, after any inline comments, to leave a brief overall summary of scope, severity mix, cross-cutting risks, open questions, or the absence of issues. Do not restate the full text of inline comments in the overall review.
 
 ## Safe Outputs
 
-- Use `create-pull-request-review-comment` for inline comments on specific changed lines.
-- Use `submit-pull-request-review` for the overall review comment. Do not use it to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
-- Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow; leave only a comment review summarizing findings, risks, questions, or the absence of issues.
-- If you cannot retrieve the pull request diff, cannot map findings to changed lines, or determine there is no new action to take, call `noop` with a short explanation instead of guessing.
+- Prefer `create-pull-request-review-comment` over `submit-pull-request-review` whenever a finding maps to a specific changed line.
+- Use `create-pull-request-review-comment` for inline comments on specific changed lines. Keep each comment narrowly scoped to one actionable issue, with severity and reasoning grounded in the diff.
+- Use `submit-pull-request-review` for one brief overall review comment after inline comments are created. Reserve it for a concise summary, line-unmappable cross-cutting concerns, open questions, residual risks, or `No concrete bugs found.`
+- Do not use `submit-pull-request-review` to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
+- Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow.
+- If you cannot retrieve the pull request diff, cannot map a concrete finding to a changed line, and do not have a short cross-cutting summary to leave, call `noop` with a short explanation instead of guessing.
 
 ## Cache Updates
 
