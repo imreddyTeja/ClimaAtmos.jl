@@ -56,12 +56,16 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 
 ## Safe Outputs
 
+- Formatting for all review bodies and inline comments: use plain Markdown paragraphs and flat bullets only. Do not use ATX headings (`#`, `##`, `###`, etc.), tables, or fenced code blocks in review comments.
+- Write review bodies with actual newlines, not escaped sequences. Do not emit literal `\n`, `\t`, or JSON-stringified comment text.
 - Prefer `create-pull-request-review-comment` over `submit-pull-request-review` whenever a finding maps to a specific changed line.
 - Use `create-pull-request-review-comment` for inline comments on specific changed lines. Keep each comment narrowly scoped to one actionable issue, with severity and reasoning grounded in the diff.
 - Use `submit-pull-request-review` for one brief overall review comment after inline comments are created. Reserve it for a concise summary, line-unmappable cross-cutting concerns, open questions, residual risks, or `No concrete bugs found.`
 - Do not use `submit-pull-request-review` to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
 - Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow.
 - If you cannot retrieve the pull request diff, cannot map a concrete finding to a changed line, and do not have a short cross-cutting summary to leave, call `noop` with a short explanation instead of guessing.
+
+For inline review comments, start with plain text like `high: title` or `medium: title`, followed by a short paragraph. Do not prefix inline comments with heading markers.
 
 ## Cache Updates
 
