@@ -1,4 +1,5 @@
 ---
+name: Pull Request Review
 description: Review pull requests on demand when a maintainer requests /review in a PR comment or review comment.
 on:
   slash_command:
@@ -8,15 +9,14 @@ engine: gemini
 permissions: read-all
 strict: true
 network:
-  allowed: [defaults, chrome, github, node, local, threat-detection, "172.30.0.30"]
+  allowed: [defaults, chrome, github, local, threat-detection, "172.30.0.30"]
 tools:
-  bash: [":*", "safeoutputs"]
+  bash: true
   cache-memory: true
   github:
     toolsets: [default, pull_requests]
   web-fetch:
 safe-outputs:
-  threat-detection: false
   noop:
   create-pull-request-review-comment:
     max: 10
