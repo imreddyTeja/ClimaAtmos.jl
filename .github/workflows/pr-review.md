@@ -54,6 +54,7 @@ Use `docs/dev-guides/workflow/review.md` as the primary review rubric. Use `docs
 ## Safe Outputs
 
 - Formatting for all review bodies and inline comments: use plain Markdown paragraphs and flat bullets only.
+- Before creating an inline comment, verify that the target path is in the changed-files list and that the target line number is visibly present in the current diff hunk for that file. If any of that is uncertain, put the finding in the single overall review comment instead.
 - Use `submit-pull-request-review` for one brief overall review comment after inline comments are created. Make sure to follow the Output Schema in `docs/dev-guides/workflow/review.md`
 - Do not use `submit-pull-request-review` to output warnings related to the review process itself (e.g., inability to fetch the diff, or that there are no new findings compared to the last review). Use `noop` for those cases instead.
 - Set `event: COMMENT` on `submit-pull-request-review` explicitly every time. Do not use `APPROVE` or `REQUEST_CHANGES` in this workflow.
